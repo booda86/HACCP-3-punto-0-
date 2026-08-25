@@ -1,0 +1,64 @@
+name: Build HACCP Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Installa Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Estrai progetto
+        run: |
+          mkdir extracted
+          unzip "Haccp 3Punto0.zip" -d extracted
+          PROJECT_DIR=$(dirname "$(find extracted -name pubspec.yaml -print -quit)")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Progetto trovato in: $PROJECT_DIR"
+
+      - name: Genera Android
+        run: |
+          cd "$PROJECT_DIR"
+          flutter create --platforms=android .
+
+      - name: Configura permessi Android
+        run: |
+          cd "$PROJECT_DIR"
+          python3 scripts/prepare_android.py
+
+      - name: Installa dipendenze
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
+
+      - name: Genera database Drift
+        run: |
+          cd "$PROJECT_DIR"
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Compila APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter build apk --debug
+
+      - name: Salva APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HACCP-3-Punto-0-APK
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 30
