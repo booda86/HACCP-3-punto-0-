@@ -1,0 +1,17 @@
+Aggiornamento HACCP Manager Pro PWA v2
+
+NOVITÀ
+- Aggiunta gestione libera di frigoriferi e congelatori.
+- Puoi aggiungere tutte le attrezzature che vuoi.
+- Ogni attrezzatura ha nome, tipo, posizione, temperatura minima e massima.
+- Puoi modificare ed eliminare le attrezzature.
+- Quando registri una temperatura scegli l'attrezzatura dall'elenco.
+- L'app segnala automaticamente le temperature fuori limite.
+- I dati già salvati restano compatibili.
+
+PER AGGIORNARE GITHUB
+Sostituisci nel repository:
+1. app.js
+2. service-worker.js
+
+Poi attendi GitHub Pages e ricarica l'app.
