@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#00695c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="HACCP Pro">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="styles.css">
+<title>HACCP Manager Pro</title>
+</head>
+<body>
+<header><div><small>3 PUNTO 0</small><h1>HACCP Manager Pro</h1></div></header>
+<main id="view"></main>
+<nav>
+<button data-view="dashboard">🏠<span>Home</span></button>
+<button data-view="magazzino">📦<span>Magazzino</span></button>
+<button data-view="scadenze">⏰<span>Scadenze</span></button>
+<button data-view="temperature">🌡️<span>Temperature</span></button>
+<button data-view="altro">☰<span>Altro</span></button>
+</nav>
+<dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
+<script src="app.js"></script>
+</body>
+</html>
