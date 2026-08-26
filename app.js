@@ -11,7 +11,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
 const LOCAL_KEY='haccp_pwa_v1';
-const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[],abbattimenti:[],magazzino:[],movimenti:[]};
+const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[],abbattimenti:[],magazzino:[],movimenti:[],utenti:[]};
 
 let data={...defaults};
 let view='dashboard';
@@ -31,6 +31,20 @@ const today=()=>new Date().toISOString().slice(0,10);
 const fmt=d=>d?new Date(d+(d.length===10?'T12:00:00':'')).toLocaleDateString('it-IT'):'-';
 const fmtDT=d=>new Date(d).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'});
 const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+
+const ROLE_LABELS={admin:'Amministratore',haccp:'Responsabile HACCP',magazzino:'Magazzino',cucina:'Cucina',lettura:'Solo lettura'};
+function defaultPermsForRole(role){
+  const b={lotti:false,temperature:false,ssop:false,abbattimenti:false,magazzino:false,attrezzature:false,utenti:false};
+  if(role==='admin')return {lotti:true,temperature:true,ssop:true,abbattimenti:true,magazzino:true,attrezzature:true,utenti:true};
+  if(role==='haccp')return {lotti:true,temperature:true,ssop:true,abbattimenti:true,magazzino:false,attrezzature:true,utenti:false};
+  if(role==='magazzino')return {lotti:true,temperature:false,ssop:false,abbattimenti:false,magazzino:true,attrezzature:false,utenti:false};
+  if(role==='cucina')return {lotti:true,temperature:true,ssop:true,abbattimenti:true,magazzino:false,attrezzature:false,utenti:false};
+  return b;
+}
+function isAdmin(){return currentProfile?.ruolo==='admin'&&currentProfile?.attivo!==false}
+function can(p){if(currentProfile?.attivo===false)return false;if(isAdmin())return true;return !!currentProfile?.permessi?.[p]}
+function deny(){alert('Non hai i permessi per questa funzione.');return false}
+
 
 function col(name){return collection(db,'workspaces',WORKSPACE_ID,name)}
 function saveLocal(){localStorage.setItem(LOCAL_KEY,JSON.stringify(data))}
@@ -54,9 +68,14 @@ async function rememberProduct(p){
 
 async function saveUserProfile(profile){
   if(!currentUser)return;
-  const item={id:currentUser.uid,uid:currentUser.uid,email:currentUser.email||'',
-    nome:(profile.nome||'').trim(),cognome:(profile.cognome||'').trim(),
-    dataNascita:profile.dataNascita||'',updatedAt:new Date().toISOString()};
+  const oldSnap=await getDoc(doc(col('utenti'),currentUser.uid));
+  const old=oldSnap.exists()?oldSnap.data():{};
+  const item={...old,id:currentUser.uid,uid:currentUser.uid,email:currentUser.email||'',
+    nome:(profile.nome||old.nome||'').trim(),cognome:(profile.cognome||old.cognome||'').trim(),
+    dataNascita:profile.dataNascita||old.dataNascita||'',
+    ruolo:old.ruolo||'lettura',attivo:old.attivo!==false,
+    permessi:old.permessi||defaultPermsForRole(old.ruolo||'lettura'),
+    updatedAt:new Date().toISOString()};
   await setDoc(doc(col('utenti'),currentUser.uid),item,{merge:true});
   currentProfile=item;
 }
@@ -64,7 +83,8 @@ async function loadUserProfile(){
   if(!currentUser)return;
   const snap=await getDoc(doc(col('utenti'),currentUser.uid));
   currentProfile=snap.exists()?{id:snap.id,...snap.data()}:
-    {id:currentUser.uid,uid:currentUser.uid,email:currentUser.email||'',nome:'',cognome:'',dataNascita:''};
+    {id:currentUser.uid,uid:currentUser.uid,email:currentUser.email||'',nome:'',cognome:'',dataNascita:'',ruolo:'lettura',attivo:true,permessi:defaultPermsForRole('lettura')};
+  if(currentProfile&&!currentProfile.permessi)currentProfile.permessi=defaultPermsForRole(currentProfile.ruolo||'lettura');
 }
 function startRealtime(){
   unsubscribers.forEach(u=>u());unsubscribers=[];
@@ -75,6 +95,14 @@ function startRealtime(){
     }));
   }
 }
+function startUsersRealtime(){
+  const u=onSnapshot(col('utenti'),snap=>{
+    data.utenti=snap.docs.map(d=>({id:d.id,...d.data()}));
+    if(ready&&view==='admin')render();
+  });
+  unsubscribers.push(u);
+}
+
 async function migrateLocalOnce(){
   const marker='cloud_migrated_'+WORKSPACE_ID+'_v43';
   if(localStorage.getItem(marker)==='1')return;
@@ -88,7 +116,7 @@ async function migrateLocalOnce(){
 onAuthStateChanged(auth,async user=>{
   currentUser=user;
   if(!user){ready=false;currentProfile=null;showLogin();return}
-  hideLogin();startRealtime();await migrateLocalOnce();await loadUserProfile();ready=true;render();
+  hideLogin();startRealtime();await migrateLocalOnce();await loadUserProfile();if(currentProfile?.attivo===false){alert('Account disattivato.');await signOut(auth);return;}if(isAdmin())startUsersRealtime();ready=true;render();
   if(!currentProfile?.nome||!currentProfile?.cognome||!currentProfile?.dataNascita)setTimeout(()=>profileModal(true),300);
 });
 
@@ -150,7 +178,7 @@ function render(){
   if(!ready)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   const e=document.getElementById('view');
-  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():view==='abbattimenti'?abbattimentiView():view==='smartmagazzino'?smartMagazzinoView():altro();
+  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():view==='abbattimenti'?abbattimentiView():view==='smartmagazzino'?smartMagazzinoView():view==='admin'?adminView():altro();
   bind();
 }
 function dashboard(){
@@ -171,7 +199,7 @@ function temperature(){return`<div class="title"><h2>Temperature giornaliere</h2
 function attrezzature(){return`<div class="title"><h2>Attrezzature</h2><button data-a="newE">+ Aggiungi</button></div><div class="list">${data.frigoriferi.map(f=>`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C${f.posizione?' • '+esc(f.posizione):''}</div></div><button class="ghost" data-edit="${f.id}">✏️</button><button class="dangerBtn" data-del-eq="${f.id}">✕</button></div>`).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`}
 function ssopView(){let[y,m]=ssopMonth.split('-').map(Number),n=new Date(y,m,0).getDate(),rows='';for(let d=1;d<=n;d++){const dt=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,r=data.ssop.find(x=>x.data===dt);rows+=`<div class="item"><div class="icon">${r?(ssopNC(r)?'⚠️':'✅'):'📋'}</div><div class="grow"><div class="name">${fmt(dt)}</div><div class="sub">${r?(ssopNC(r)?'Presente NC':'Tutto conforme'):'Non compilato'}</div></div><button data-ssop="${dt}">${r?'Apri':'Compila'}</button></div>`}return`<div class="title"><h2>Controllo SSOP</h2><button data-a="ssopPDF">PDF</button></div><div class="card"><b>C = Conforme • NC = Non Conforme</b><div class="sub">PO = Preoperativa • PS = Postoperativa</div></div><input id="ssopMonth" type="month" value="${ssopMonth}" style="margin-top:12px"><div class="list" style="margin-top:12px">${rows}</div>`}
 function altro(){return`<div class="title"><h2>Altro</h2></div><div class="list"><div class="item"><div class="icon">👤</div><div class="grow"><div class="name">${esc(profileName())}</div><div class="sub">${esc(currentUser?.email||'')}<br>${currentProfile?.dataNascita?'Nato/a il '+fmt(currentProfile.dataNascita):''}</div></div><button data-a="profile">Profilo</button></div><div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div>
-<div class="item"><div class="icon">❄️</div><div class="grow"><div class="name">Scheda abbattimento</div><div class="sub">Registro abbattimento prodotti alimentari</div></div><button data-a="goAbb">Apri</button></div><div class="item"><div class="icon">📦</div><div class="grow"><div class="name">Magazzino Smart</div><div class="sub">Quantità, carico/scarico e inventario</div></div><button data-a="goSmart">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div><div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div></div><button data-a="logout">Esci</button></div></div>`}
+<div class="item"><div class="icon">❄️</div><div class="grow"><div class="name">Scheda abbattimento</div><div class="sub">Registro abbattimento prodotti alimentari</div></div><button data-a="goAbb">Apri</button></div><div class="item"><div class="icon">📦</div><div class="grow"><div class="name">Magazzino Smart</div><div class="sub">Quantità, carico/scarico e inventario</div></div><button data-a="goSmart">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div>${isAdmin()?`<div class="item"><div class="icon">🛡️</div><div class="grow"><div class="name">Amministrazione</div><div class="sub">Utenti, ruoli e mansioni</div></div><button data-a="goAdmin">Apri</button></div>`:''}<div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div><div class="sub">${esc(ROLE_LABELS[currentProfile?.ruolo]||'Utente')}</div></div><button data-a="logout">Esci</button></div></div>`}
 
 
 function abbattimentiView(){
@@ -195,6 +223,7 @@ function abbattimentiView(){
 }
 
 function abbattimentoModal(ex=null){
+  if(!can('abbattimenti'))return deny();
   const {m,f}=modalBase(ex?'Modifica abbattimento':'Nuovo abbattimento',
   `<div class="form">
     <label class="full">Denominazione del prodotto<input name="denominazione" required value="${esc(ex?.denominazione||'')}"></label>
@@ -281,6 +310,7 @@ async function saveMovement(item,tipo,quantita,note=''){
   await saveShared('movimenti',{id:id(),prodottoId:item.id,nome:item.nome,tipo,quantita:Number(quantita),unita:item.unita||'',note,operatore:profileName(),operatoreUid:currentUser?.uid||'',ts:new Date().toISOString()});
 }
 function stockModal(ex=null,prefill={}){
+  if(!can('magazzino'))return deny();
   const units=['pezzi','kg','g','litri','ml','bottiglie','confezioni','vaschette','cartoni'];
   const cats=['Pesce','Carne','Latticini','Ortofrutta','Surgelati','Dispensa','Bevande','Altro'];
   const cur={...prefill,...(ex||{})};
@@ -295,15 +325,18 @@ function stockModal(ex=null,prefill={}){
   async e=>{e.preventDefault();const x=new FormData(f);const q=parseFloat(String(x.get('quantita')).replace(',','.')),s=parseFloat(String(x.get('soglia')).replace(',','.'));if(Number.isNaN(q)||q<0)return alert('Inserisci una quantità valida.');if(Number.isNaN(s)||s<0)return alert('Inserisci una soglia valida.');const item={id:ex?.id||id(),nome:x.get('nome').trim(),categoria:x.get('categoria'),unita:x.get('unita'),quantita:q,sogliaMinima:s,barcode:x.get('barcode').trim(),note:x.get('note').trim(),aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''};await saveShared('magazzino',item);if(!ex&&q>0)await saveMovement(item,'INVENTARIO',q,'Quantità iniziale');m.close()});
 }
 function movementModal(item,tipo){
+  if(!can('magazzino'))return deny();
   const isLoad=tipo==='CARICO';
   const {m,f}=modalBase(`${isLoad?'Carico':'Scarico'} — ${esc(item.nome)}`,`<div class="form"><label class="full">Quantità ${esc(item.unita||'')}<input name="q" required type="text" inputmode="decimal"></label><label class="full">Note<input name="note"></label><div class="full sub">Disponibile: ${qtyFmt(item.quantita,item.unita)}</div></div>`,
   async e=>{e.preventDefault();const x=new FormData(f),q=parseFloat(String(x.get('q')).replace(',','.'));if(Number.isNaN(q)||q<=0)return alert('Inserisci una quantità maggiore di zero.');const current=Number(item.quantita||0),next=isLoad?current+q:current-q;if(next<0)return alert('Lo scarico supera la quantità disponibile.');await saveShared('magazzino',{...item,quantita:next,aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''});await saveMovement(item,tipo,q,x.get('note').trim());m.close()});
 }
 function inventoryAdjustModal(item){
+  if(!can('magazzino'))return deny();
   const {m,f}=modalBase(`Inventario — ${esc(item.nome)}`,`<div class="form"><label class="full">Quantità contata (${esc(item.unita||'')})<input name="q" required type="text" inputmode="decimal" value="${esc(item.quantita??0)}"></label><label class="full">Note<input name="note"></label><div class="full sub">Quantità precedente: ${qtyFmt(item.quantita,item.unita)}</div></div>`,
   async e=>{e.preventDefault();const x=new FormData(f),q=parseFloat(String(x.get('q')).replace(',','.'));if(Number.isNaN(q)||q<0)return alert('Inserisci una quantità valida.');const diff=q-Number(item.quantita||0);await saveShared('magazzino',{...item,quantita:q,aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''});await saveMovement(item,'INVENTARIO',Math.abs(diff),`Conteggio inventario: ${qtyFmt(q,item.unita)}${x.get('note')?' • '+x.get('note').trim():''}`);m.close()});
 }
 function inventoryScanModal(){
+  if(!can('magazzino'))return deny();
   const m=document.getElementById('modal'),f=document.getElementById('modalForm');f.className='modal';
   f.innerHTML=`<h2>📷 Inventario rapido</h2><div class="card"><b>Scansiona prodotto</b><div class="sub">Inquadra barcode/QR oppure scatta una foto dell'etichetta. Se il prodotto esiste già, apriamo subito il conteggio.</div></div><div style="margin-top:12px"><input id="invFile" type="file" accept="image/*" capture="environment"><img id="invPreview" style="display:none;width:100%;max-height:300px;object-fit:contain;margin-top:12px;border-radius:14px"><div id="invStatus" class="sub" style="margin-top:10px"></div></div><div class="actions"><button type="button" class="ghost" id="cancel">Annulla</button><button type="button" id="analyzeInv">Analizza</button></div>`;
   f.querySelector('#cancel').onclick=()=>m.close();
@@ -311,6 +344,60 @@ function inventoryScanModal(){
   file.onchange=()=>{const selected=file.files?.[0];if(!selected)return;img.src=URL.createObjectURL(selected);img.style.display='block';status.textContent='Foto pronta.'};
   f.querySelector('#analyzeInv').onclick=async()=>{if(!img.src)return alert('Scatta o scegli prima una foto.');try{status.textContent='Lettura barcode...';const barcode=await barcodeFromImage(img);if(barcode){const found=(data.magazzino||[]).find(x=>String(x.barcode||'').trim()===String(barcode).trim());if(found){m.close();setTimeout(()=>inventoryAdjustModal(found),100);return;}}status.textContent='Lettura etichetta...';const text=await ocrImage(img),name=suggestName(text),cat=categoryFromText(text),found=(data.magazzino||[]).find(x=>norm(x.nome)===norm(name));if(found){m.close();setTimeout(()=>inventoryAdjustModal(found),100);return;}m.close();setTimeout(()=>stockModal(null,{nome:name,categoria:cat,barcode:barcode||''}),100);}catch{status.textContent='Lettura non riuscita. Inserisci manualmente.';setTimeout(()=>{m.close();stockModal()},700)}};
   m.showModal();
+}
+
+
+function adminView(){
+  if(!isAdmin())return `<div class="card"><b>Accesso negato</b><div class="sub">Sezione riservata all'amministratore.</div></div>`;
+  const users=[...(data.utenti||[])].sort((a,b)=>(a.cognome||a.email||'').localeCompare(b.cognome||b.email||''));
+  return `<div class="title"><h2>🛡️ Amministrazione</h2></div>
+  <div class="card"><b>Utenti registrati: ${users.length}</b><div class="sub">Assegna ruolo, mansioni e stato account.</div></div>
+  <div class="list" style="margin-top:12px">
+  ${users.map(u=>`<div class="item">
+    <div class="icon">${u.ruolo==='admin'?'🛡️':'👤'}</div>
+    <div class="grow">
+      <div class="name">${esc([u.nome,u.cognome].filter(Boolean).join(' ')||u.email||'Utente')}</div>
+      <div class="sub">${esc(u.email||'')}<br>${esc(ROLE_LABELS[u.ruolo]||u.ruolo||'Solo lettura')} • ${u.attivo===false?'DISATTIVATO':'Attivo'}</div>
+      <div class="sub">Mansioni: ${Object.entries(u.permessi||defaultPermsForRole(u.ruolo||'lettura')).filter(([k,v])=>v).map(([k])=>k).join(', ')||'nessuna'}</div>
+    </div>
+    <button data-user-edit="${u.id}">Gestisci</button>
+  </div>`).join('')||'<div class="empty">Nessun utente.</div>'}
+  </div>`;
+}
+async function updateUserAdmin(uid,patch){
+  if(!isAdmin())return deny();
+  await setDoc(doc(col('utenti'),uid),{...patch,updatedAt:new Date().toISOString(),updatedByUid:currentUser?.uid||''},{merge:true});
+}
+function userAdminModal(u){
+  if(!isAdmin())return deny();
+  const perms={...defaultPermsForRole(u.ruolo||'lettura'),...(u.permessi||{})};
+  const {m,f}=modalBase(`Gestisci — ${esc([u.nome,u.cognome].filter(Boolean).join(' ')||u.email||'Utente')}`,
+  `<div class="form">
+    <label class="full">Email<input value="${esc(u.email||'')}" disabled></label>
+    <label class="full">Nome e cognome<input value="${esc([u.nome,u.cognome].filter(Boolean).join(' '))}" disabled></label>
+    <label class="full">Ruolo<select name="ruolo">${Object.entries(ROLE_LABELS).map(([k,v])=>`<option value="${k}" ${k===(u.ruolo||'lettura')?'selected':''}>${v}</option>`).join('')}</select></label>
+    <label class="full" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="attivo" ${u.attivo===false?'':'checked'}> Utente attivo</label>
+    <div class="full"><b>Mansioni specifiche</b></div>
+    ${[
+      ['lotti','Lotti e scadenze'],
+      ['temperature','Temperature'],
+      ['ssop','SSOP'],
+      ['abbattimenti','Abbattimenti'],
+      ['magazzino','Magazzino Smart'],
+      ['attrezzature','Frigoriferi/congelatori'],
+      ['utenti','Gestione utenti']
+    ].map(([k,l])=>`<label class="full" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="p_${k}" ${perms[k]?'checked':''}> ${l}</label>`).join('')}
+    ${u.id===currentUser?.uid?'<div class="full sub">⚠️ Stai modificando il tuo account amministratore.</div>':''}
+  </div>`,
+  async e=>{
+    e.preventDefault();
+    const x=new FormData(f),role=x.get('ruolo'),p={};
+    for(const k of ['lotti','temperature','ssop','abbattimenti','magazzino','attrezzature','utenti'])p[k]=x.get('p_'+k)==='on';
+    if(role==='admin')Object.assign(p,defaultPermsForRole('admin'));
+    if(u.id===currentUser?.uid && (role!=='admin'||x.get('attivo')!=='on'))return alert('Per sicurezza non puoi toglierti da solo il ruolo amministratore o disattivarti.');
+    await updateUserAdmin(u.id,{ruolo:role,attivo:x.get('attivo')==='on',permessi:p});
+    m.close();
+  });
 }
 
 function bind(){
@@ -322,7 +409,8 @@ function bind(){
   document.querySelectorAll('[data-a="goTemps"]').forEach(b=>b.onclick=()=>{view='temperature';render()});
   document.querySelectorAll('[data-a="goAbb"]').forEach(b=>b.onclick=()=>{view='abbattimenti';render()});
   document.querySelectorAll('[data-a="newAbb"]').forEach(b=>b.onclick=()=>abbattimentoModal());
-  document.querySelectorAll('[data-a="goSmart"]').forEach(b=>b.onclick=()=>{view='smartmagazzino';render()});
+  document.querySelectorAll('[data-a="goSmart"]').forEach(b=>b.onclick=()=>{if(!can('magazzino'))return deny();view='smartmagazzino';render()});
+  document.querySelectorAll('[data-a="goAdmin"]').forEach(b=>b.onclick=()=>{if(!isAdmin())return deny();view='admin';render()});
   document.querySelectorAll('[data-a="newStock"]').forEach(b=>b.onclick=()=>stockModal());
   document.querySelectorAll('[data-a="inventoryScan"]').forEach(b=>b.onclick=inventoryScanModal);
   document.querySelectorAll('[data-a="goMovimenti"]').forEach(b=>b.onclick=()=>{const x=document.getElementById('movimentiBox');if(x)x.style.display=x.style.display==='none'?'block':'none'});
@@ -338,7 +426,8 @@ function bind(){
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questo lotto?'))await removeShared('prodotti',b.dataset.del)});
   document.querySelectorAll('[data-stock-add]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockAdd);if(i)movementModal(i,'CARICO')});
   document.querySelectorAll('[data-stock-sub]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockSub);if(i)movementModal(i,'SCARICO')});
-  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockEdit);if(i)stockModal(i)});
+  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{if(!can('magazzino'))return deny();const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockEdit);if(i)stockModal(i)});
+  document.querySelectorAll('[data-user-edit]').forEach(b=>b.onclick=()=>{if(!isAdmin())return deny();const u=(data.utenti||[]).find(x=>x.id===b.dataset.userEdit);if(u)userAdminModal(u)});
   const ss=document.getElementById('stockSearch');if(ss)ss.oninput=()=>{const q=ss.value.toLowerCase();document.getElementById('stockList').innerHTML=stockListHtml((data.magazzino||[]).filter(i=>[i.nome,i.categoria,i.barcode,i.unita].some(x=>(x||'').toLowerCase().includes(q))));bind()};
   const sm=document.getElementById('ssopMonth');if(sm)sm.onchange=()=>{ssopMonth=sm.value;render()};
   const s=document.getElementById('search');if(s)s.oninput=()=>{const q=s.value.toLowerCase();document.getElementById('inv').innerHTML=inv(data.prodotti.filter(p=>[p.nome,p.lotto,p.categoria,p.fornitore,p.barcode].some(x=>(x||'').toLowerCase().includes(q))));bind()};
@@ -436,6 +525,7 @@ async function ocrImage(img){
 }
 
 function scannerModal(){
+  if(!can('lotti'))return deny();
   const m=document.getElementById('modal'),f=document.getElementById('modalForm');f.className='modal';
   f.innerHTML=`<h2>📷 Scanner lotto</h2>
   <div class="card"><b>iPhone e Android</b><div class="sub">Scatta una foto dell'etichetta. L'app prova a leggere prodotto, lotto, scadenza, peso e barcode. Controlla sempre i dati prima di salvare.</div></div>
@@ -476,6 +566,7 @@ function scannerModal(){
 }
 
 function productModal(prefill={},fromScan=false){
+  if(!can('lotti'))return deny();
   const cats=['Pesce','Carne','Latticini','Ortofrutta','Surgelati','Dispensa','Altro'];
   const {m,f}=modalBase(fromScan?'Conferma dati etichetta':'Nuovo prodotto / lotto',
   `<div class="form">
@@ -498,6 +589,7 @@ function productModal(prefill={},fromScan=false){
 }
 
 function dailyTempModal(frigo){
+  if(!can('temperature'))return deny();
   const existing=tempTodayFor(frigo.id),fixedId=`${frigo.id}_${today()}`;
   const {m,f}=modalBase(`${existing?'Modifica':'Registra'} temperatura — ${esc(frigo.nome)}`,
   `<div class="form"><label class="full">Data<input value="${fmt(today())}" disabled></label>
@@ -508,6 +600,7 @@ function dailyTempModal(frigo){
   async e=>{e.preventDefault();const x=new FormData(f),valore=parseFloat(String(x.get('val')).trim().replace(',','.'));if(Number.isNaN(valore))return alert('Temperatura non valida.');const fuori=valore<Number(frigo.min)||valore>Number(frigo.max),note=x.get('note').trim();if(fuori&&!note)return alert('Temperatura fuori limite: inserisci una nota o azione correttiva.');await saveShared('temperature',{id:fixedId,giorno:today(),frigoId:frigo.id,frigoNome:frigo.nome,frigoTipo:frigo.tipo||'',frigoMin:Number(frigo.min),frigoMax:Number(frigo.max),valore,operatore:(x.get('op')||profileName()).trim(),operatoreUid:currentUser?.uid||'',note,ts:new Date().toISOString()});m.close()});
 }
 function equipModal(ex=null){
+  if(!can('attrezzature'))return deny();
   const {m,f}=modalBase(ex?'Modifica attrezzatura':'Nuova attrezzatura',
   `<div class="form"><label class="full">Nome<input name="nome" required value="${esc(ex?.nome||'')}"></label>
   <label>Tipo<select name="tipo"><option ${ex?.tipo==='Frigorifero'?'selected':''}>Frigorifero</option><option ${ex?.tipo==='Congelatore'?'selected':''}>Congelatore</option></select></label>
@@ -517,6 +610,7 @@ function equipModal(ex=null){
 }
 function sel(n,l,v=''){return`<label class="full">${l}<select name="${n}"><option value="">—</option><option ${v==='C'?'selected':''}>C</option><option ${v==='NC'?'selected':''}>NC</option></select></label>`}
 function ssopModal(dt){
+  if(!can('ssop'))return deny();
   const ex=data.ssop.find(x=>x.data===dt)||{data:dt};
   const {m,f}=modalBase(`SSOP — ${fmt(dt)}`,`<div class="form">
   ${sel('attrezzaturePO','Idoneità attrezzature — PO',ex.attrezzaturePO)}${sel('attrezzaturePS','Idoneità attrezzature — PS',ex.attrezzaturePS)}
