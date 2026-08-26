@@ -11,7 +11,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
 const LOCAL_KEY='haccp_pwa_v1';
-const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[],abbattimenti:[]};
+const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[],abbattimenti:[],magazzino:[],movimenti:[]};
 
 let data={...defaults};
 let view='dashboard';
@@ -68,7 +68,7 @@ async function loadUserProfile(){
 }
 function startRealtime(){
   unsubscribers.forEach(u=>u());unsubscribers=[];
-  for(const name of ['prodotti','temperature','frigoriferi','ssop','product_memory','abbattimenti']){
+  for(const name of ['prodotti','temperature','frigoriferi','ssop','product_memory','abbattimenti','magazzino','movimenti']){
     unsubscribers.push(onSnapshot(col(name),snap=>{
       data[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
       saveLocal(); if(ready)render();
@@ -150,7 +150,7 @@ function render(){
   if(!ready)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   const e=document.getElementById('view');
-  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():view==='abbattimenti'?abbattimentiView():altro();
+  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():view==='abbattimenti'?abbattimentiView():view==='smartmagazzino'?smartMagazzinoView():altro();
   bind();
 }
 function dashboard(){
@@ -160,7 +160,7 @@ function dashboard(){
   <div class="card"><b>SSOP oggi</b><div class="metric ${ssopDone?'ok':''}">${ssopDone?'✓':'—'}</div><div class="sub">${ssopDone?'Compilato':'Da compilare'}</div></div>
   <div class="card"><b>Scadenze critiche</b><div class="metric ${crit?'danger':'ok'}">${crit}</div></div></div>
   <div class="title"><h2>Azioni rapide</h2></div>
-  <div class="grid"><button data-a="scanLot">📷 Scanner lotto</button><button data-a="newP" class="ghost">✏️ Lotto manuale</button><button data-a="newAbb">❄️ Nuovo abbattimento</button><button data-a="goAbb" class="ghost">📋 Registro abbattimenti</button></div>
+  <div class="grid"><button data-a="scanLot">📷 Scanner lotto</button><button data-a="newP" class="ghost">✏️ Lotto manuale</button><button data-a="goSmart">📦 Magazzino Smart</button><button data-a="inventoryScan" class="ghost">📷 Inventario rapido</button><button data-a="newAbb">❄️ Nuovo abbattimento</button><button data-a="goAbb" class="ghost">📋 Registro abbattimenti</button></div>
   <div class="title"><h2>Controllo giornaliero frighi</h2><button data-a="goTemps">Apri</button></div>
   <div class="list">${data.frigoriferi.map(f=>{const t=tempTodayFor(f.id);return`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • Limiti ${f.min}/${f.max} °C</div>${t?`<span class="badge ${tempOut(f,t)?'danger':''}">${Number(t.valore).toFixed(1)} °C • registrata oggi</span>`:'<span class="badge danger">MANCANTE OGGI</span>'}</div><button data-temp-eq="${f.id}">${t?'Modifica':'Registra'}</button></div>`}).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`;
 }
@@ -171,7 +171,7 @@ function temperature(){return`<div class="title"><h2>Temperature giornaliere</h2
 function attrezzature(){return`<div class="title"><h2>Attrezzature</h2><button data-a="newE">+ Aggiungi</button></div><div class="list">${data.frigoriferi.map(f=>`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C${f.posizione?' • '+esc(f.posizione):''}</div></div><button class="ghost" data-edit="${f.id}">✏️</button><button class="dangerBtn" data-del-eq="${f.id}">✕</button></div>`).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`}
 function ssopView(){let[y,m]=ssopMonth.split('-').map(Number),n=new Date(y,m,0).getDate(),rows='';for(let d=1;d<=n;d++){const dt=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,r=data.ssop.find(x=>x.data===dt);rows+=`<div class="item"><div class="icon">${r?(ssopNC(r)?'⚠️':'✅'):'📋'}</div><div class="grow"><div class="name">${fmt(dt)}</div><div class="sub">${r?(ssopNC(r)?'Presente NC':'Tutto conforme'):'Non compilato'}</div></div><button data-ssop="${dt}">${r?'Apri':'Compila'}</button></div>`}return`<div class="title"><h2>Controllo SSOP</h2><button data-a="ssopPDF">PDF</button></div><div class="card"><b>C = Conforme • NC = Non Conforme</b><div class="sub">PO = Preoperativa • PS = Postoperativa</div></div><input id="ssopMonth" type="month" value="${ssopMonth}" style="margin-top:12px"><div class="list" style="margin-top:12px">${rows}</div>`}
 function altro(){return`<div class="title"><h2>Altro</h2></div><div class="list"><div class="item"><div class="icon">👤</div><div class="grow"><div class="name">${esc(profileName())}</div><div class="sub">${esc(currentUser?.email||'')}<br>${currentProfile?.dataNascita?'Nato/a il '+fmt(currentProfile.dataNascita):''}</div></div><button data-a="profile">Profilo</button></div><div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div>
-<div class="item"><div class="icon">❄️</div><div class="grow"><div class="name">Scheda abbattimento</div><div class="sub">Registro abbattimento prodotti alimentari</div></div><button data-a="goAbb">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div><div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div></div><button data-a="logout">Esci</button></div></div>`}
+<div class="item"><div class="icon">❄️</div><div class="grow"><div class="name">Scheda abbattimento</div><div class="sub">Registro abbattimento prodotti alimentari</div></div><button data-a="goAbb">Apri</button></div><div class="item"><div class="icon">📦</div><div class="grow"><div class="name">Magazzino Smart</div><div class="sub">Quantità, carico/scarico e inventario</div></div><button data-a="goSmart">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div><div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div></div><button data-a="logout">Esci</button></div></div>`}
 
 
 function abbattimentiView(){
@@ -240,6 +240,79 @@ function abbattimentoModal(ex=null){
   });
 }
 
+
+function qtyFmt(q,u){
+  const n=Number(q||0);
+  const shown=Number.isInteger(n)?String(n):n.toFixed(2).replace('.',',');
+  return `${shown} ${u||''}`.trim();
+}
+function stockStatus(item){
+  const q=Number(item.quantita||0), min=Number(item.sogliaMinima||0);
+  if(q<=0)return 'danger';
+  if(min>0 && q<=min)return 'warn';
+  return '';
+}
+function stockListHtml(rows){
+  return rows.length?rows.map(item=>`
+    <div class="item">
+      <div class="icon">${item.categoria==='Pesce'?'🐟':item.categoria==='Carne'?'🥩':'📦'}</div>
+      <div class="grow">
+        <div class="name">${esc(item.nome)}</div>
+        <div class="sub">${esc(item.categoria||'')} ${item.barcode?'• '+esc(item.barcode):''}</div>
+        <span class="badge ${stockStatus(item)}">${qtyFmt(item.quantita,item.unita)}</span>
+        ${Number(item.sogliaMinima||0)>0?`<div class="sub">Soglia minima: ${qtyFmt(item.sogliaMinima,item.unita)}</div>`:''}
+      </div>
+      <button data-stock-add="${item.id}">+ Carico</button>
+      <button class="ghost" data-stock-sub="${item.id}">− Scarico</button>
+      <button class="ghost" data-stock-edit="${item.id}">✏️</button>
+    </div>`).join(''):'<div class="empty">Nessun prodotto nel Magazzino Smart.</div>';
+}
+function smartMagazzinoView(){
+  const rows=[...(data.magazzino||[])].sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const low=rows.filter(x=>Number(x.sogliaMinima||0)>0 && Number(x.quantita||0)<=Number(x.sogliaMinima||0)).length;
+  return `<div class="title"><h2>📦 Magazzino Smart</h2><button data-a="inventoryScan">📷 Scansiona</button></div>
+  <div class="grid"><div class="card"><b>Prodotti gestiti</b><div class="metric">${rows.length}</div></div><div class="card"><b>Scorte basse</b><div class="metric ${low?'danger':'ok'}">${low}</div></div></div>
+  <div class="grid" style="margin-top:12px"><button data-a="newStock">+ Nuovo prodotto</button><button data-a="inventoryScan" class="ghost">📷 Inventario rapido</button><button data-a="goMovimenti" class="ghost">🧾 Storico movimenti</button></div>
+  <input id="stockSearch" class="search" placeholder="Cerca prodotto, categoria, barcode..." style="margin-top:14px">
+  <div id="stockList" class="list" style="margin-top:12px">${stockListHtml(rows)}</div>
+  <div id="movimentiBox" style="display:none;margin-top:18px"><div class="title"><h2>Storico movimenti</h2></div><div class="list">${[...(data.movimenti||[])].sort((a,b)=>(b.ts||'').localeCompare(a.ts||'')).slice(0,100).map(m=>`<div class="item"><div class="icon">${m.tipo==='CARICO'?'➕':m.tipo==='SCARICO'?'➖':'🧮'}</div><div class="grow"><div class="name">${esc(m.nome||'Prodotto')}</div><div class="sub">${fmtDT(m.ts)} • ${esc(m.tipo||'')} • ${qtyFmt(m.quantita,m.unita)}<br>${esc(m.operatore||'')}${m.note?' • '+esc(m.note):''}</div></div></div>`).join('')||'<div class="empty">Nessun movimento.</div>'}</div></div>`;
+}
+async function saveMovement(item,tipo,quantita,note=''){
+  await saveShared('movimenti',{id:id(),prodottoId:item.id,nome:item.nome,tipo,quantita:Number(quantita),unita:item.unita||'',note,operatore:profileName(),operatoreUid:currentUser?.uid||'',ts:new Date().toISOString()});
+}
+function stockModal(ex=null,prefill={}){
+  const units=['pezzi','kg','g','litri','ml','bottiglie','confezioni','vaschette','cartoni'];
+  const cats=['Pesce','Carne','Latticini','Ortofrutta','Surgelati','Dispensa','Bevande','Altro'];
+  const cur={...prefill,...(ex||{})};
+  const {m,f}=modalBase(ex?'Modifica prodotto magazzino':'Nuovo prodotto magazzino',
+  `<div class="form"><label class="full">Nome prodotto<input name="nome" required value="${esc(cur.nome||'')}"></label>
+  <label>Categoria<select name="categoria">${cats.map(c=>`<option ${c===(cur.categoria||'Altro')?'selected':''}>${c}</option>`).join('')}</select></label>
+  <label>Unità di misura<select name="unita">${units.map(u=>`<option ${u===(cur.unita||'pezzi')?'selected':''}>${u}</option>`).join('')}</select></label>
+  <label>Quantità attuale<input name="quantita" type="text" inputmode="decimal" value="${esc(cur.quantita??0)}"></label>
+  <label>Soglia minima<input name="soglia" type="text" inputmode="decimal" value="${esc(cur.sogliaMinima??0)}"></label>
+  <label class="full">Barcode / QR<input name="barcode" value="${esc(cur.barcode||'')}"></label>
+  <label class="full">Note<input name="note" value="${esc(cur.note||'')}"></label></div>`,
+  async e=>{e.preventDefault();const x=new FormData(f);const q=parseFloat(String(x.get('quantita')).replace(',','.')),s=parseFloat(String(x.get('soglia')).replace(',','.'));if(Number.isNaN(q)||q<0)return alert('Inserisci una quantità valida.');if(Number.isNaN(s)||s<0)return alert('Inserisci una soglia valida.');const item={id:ex?.id||id(),nome:x.get('nome').trim(),categoria:x.get('categoria'),unita:x.get('unita'),quantita:q,sogliaMinima:s,barcode:x.get('barcode').trim(),note:x.get('note').trim(),aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''};await saveShared('magazzino',item);if(!ex&&q>0)await saveMovement(item,'INVENTARIO',q,'Quantità iniziale');m.close()});
+}
+function movementModal(item,tipo){
+  const isLoad=tipo==='CARICO';
+  const {m,f}=modalBase(`${isLoad?'Carico':'Scarico'} — ${esc(item.nome)}`,`<div class="form"><label class="full">Quantità ${esc(item.unita||'')}<input name="q" required type="text" inputmode="decimal"></label><label class="full">Note<input name="note"></label><div class="full sub">Disponibile: ${qtyFmt(item.quantita,item.unita)}</div></div>`,
+  async e=>{e.preventDefault();const x=new FormData(f),q=parseFloat(String(x.get('q')).replace(',','.'));if(Number.isNaN(q)||q<=0)return alert('Inserisci una quantità maggiore di zero.');const current=Number(item.quantita||0),next=isLoad?current+q:current-q;if(next<0)return alert('Lo scarico supera la quantità disponibile.');await saveShared('magazzino',{...item,quantita:next,aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''});await saveMovement(item,tipo,q,x.get('note').trim());m.close()});
+}
+function inventoryAdjustModal(item){
+  const {m,f}=modalBase(`Inventario — ${esc(item.nome)}`,`<div class="form"><label class="full">Quantità contata (${esc(item.unita||'')})<input name="q" required type="text" inputmode="decimal" value="${esc(item.quantita??0)}"></label><label class="full">Note<input name="note"></label><div class="full sub">Quantità precedente: ${qtyFmt(item.quantita,item.unita)}</div></div>`,
+  async e=>{e.preventDefault();const x=new FormData(f),q=parseFloat(String(x.get('q')).replace(',','.'));if(Number.isNaN(q)||q<0)return alert('Inserisci una quantità valida.');const diff=q-Number(item.quantita||0);await saveShared('magazzino',{...item,quantita:q,aggiornatoDa:profileName(),aggiornatoDaUid:currentUser?.uid||''});await saveMovement(item,'INVENTARIO',Math.abs(diff),`Conteggio inventario: ${qtyFmt(q,item.unita)}${x.get('note')?' • '+x.get('note').trim():''}`);m.close()});
+}
+function inventoryScanModal(){
+  const m=document.getElementById('modal'),f=document.getElementById('modalForm');f.className='modal';
+  f.innerHTML=`<h2>📷 Inventario rapido</h2><div class="card"><b>Scansiona prodotto</b><div class="sub">Inquadra barcode/QR oppure scatta una foto dell'etichetta. Se il prodotto esiste già, apriamo subito il conteggio.</div></div><div style="margin-top:12px"><input id="invFile" type="file" accept="image/*" capture="environment"><img id="invPreview" style="display:none;width:100%;max-height:300px;object-fit:contain;margin-top:12px;border-radius:14px"><div id="invStatus" class="sub" style="margin-top:10px"></div></div><div class="actions"><button type="button" class="ghost" id="cancel">Annulla</button><button type="button" id="analyzeInv">Analizza</button></div>`;
+  f.querySelector('#cancel').onclick=()=>m.close();
+  const file=f.querySelector('#invFile'),img=f.querySelector('#invPreview'),status=f.querySelector('#invStatus');
+  file.onchange=()=>{const selected=file.files?.[0];if(!selected)return;img.src=URL.createObjectURL(selected);img.style.display='block';status.textContent='Foto pronta.'};
+  f.querySelector('#analyzeInv').onclick=async()=>{if(!img.src)return alert('Scatta o scegli prima una foto.');try{status.textContent='Lettura barcode...';const barcode=await barcodeFromImage(img);if(barcode){const found=(data.magazzino||[]).find(x=>String(x.barcode||'').trim()===String(barcode).trim());if(found){m.close();setTimeout(()=>inventoryAdjustModal(found),100);return;}}status.textContent='Lettura etichetta...';const text=await ocrImage(img),name=suggestName(text),cat=categoryFromText(text),found=(data.magazzino||[]).find(x=>norm(x.nome)===norm(name));if(found){m.close();setTimeout(()=>inventoryAdjustModal(found),100);return;}m.close();setTimeout(()=>stockModal(null,{nome:name,categoria:cat,barcode:barcode||''}),100);}catch{status.textContent='Lettura non riuscita. Inserisci manualmente.';setTimeout(()=>{m.close();stockModal()},700)}};
+  m.showModal();
+}
+
 function bind(){
   document.querySelectorAll('[data-a="newP"]').forEach(b=>b.onclick=()=>productModal());
   document.querySelectorAll('[data-a="scanLot"]').forEach(b=>b.onclick=scannerModal);
@@ -249,6 +322,10 @@ function bind(){
   document.querySelectorAll('[data-a="goTemps"]').forEach(b=>b.onclick=()=>{view='temperature';render()});
   document.querySelectorAll('[data-a="goAbb"]').forEach(b=>b.onclick=()=>{view='abbattimenti';render()});
   document.querySelectorAll('[data-a="newAbb"]').forEach(b=>b.onclick=()=>abbattimentoModal());
+  document.querySelectorAll('[data-a="goSmart"]').forEach(b=>b.onclick=()=>{view='smartmagazzino';render()});
+  document.querySelectorAll('[data-a="newStock"]').forEach(b=>b.onclick=()=>stockModal());
+  document.querySelectorAll('[data-a="inventoryScan"]').forEach(b=>b.onclick=inventoryScanModal);
+  document.querySelectorAll('[data-a="goMovimenti"]').forEach(b=>b.onclick=()=>{const x=document.getElementById('movimentiBox');if(x)x.style.display=x.style.display==='none'?'block':'none'});
   document.querySelectorAll('[data-a="ssopPDF"]').forEach(b=>b.onclick=ssopPDF);
   document.querySelectorAll('[data-a="profile"]').forEach(b=>b.onclick=()=>profileModal(false));
   document.querySelectorAll('[data-a="logout"]').forEach(b=>b.onclick=()=>signOut(auth));
@@ -259,6 +336,10 @@ function bind(){
   document.querySelectorAll('[data-edit-abb]').forEach(b=>b.onclick=()=>abbattimentoModal((data.abbattimenti||[]).find(x=>x.id===b.dataset.editAbb)));
   document.querySelectorAll('[data-del-abb]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questa scheda di abbattimento?'))await removeShared('abbattimenti',b.dataset.delAbb)});
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questo lotto?'))await removeShared('prodotti',b.dataset.del)});
+  document.querySelectorAll('[data-stock-add]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockAdd);if(i)movementModal(i,'CARICO')});
+  document.querySelectorAll('[data-stock-sub]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockSub);if(i)movementModal(i,'SCARICO')});
+  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{const i=(data.magazzino||[]).find(x=>x.id===b.dataset.stockEdit);if(i)stockModal(i)});
+  const ss=document.getElementById('stockSearch');if(ss)ss.oninput=()=>{const q=ss.value.toLowerCase();document.getElementById('stockList').innerHTML=stockListHtml((data.magazzino||[]).filter(i=>[i.nome,i.categoria,i.barcode,i.unita].some(x=>(x||'').toLowerCase().includes(q))));bind()};
   const sm=document.getElementById('ssopMonth');if(sm)sm.onchange=()=>{ssopMonth=sm.value;render()};
   const s=document.getElementById('search');if(s)s.oninput=()=>{const q=s.value.toLowerCase();document.getElementById('inv').innerHTML=inv(data.prodotti.filter(p=>[p.nome,p.lotto,p.categoria,p.fornitore,p.barcode].some(x=>(x||'').toLowerCase().includes(q))));bind()};
 }
