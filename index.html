@@ -11,29 +11,20 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="styles.css">
 <title>HACCP Manager Pro</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 </head>
 <body>
-<header>
-  <div>
-    <small>3 PUNTO 0</small>
-    <h1>HACCP Manager Pro</h1>
-  </div>
-</header>
-
+<header><div><small>3 PUNTO 0</small><h1>HACCP Manager Pro</h1></div></header>
 <main id="view"></main>
-
 <nav>
-  <button data-view="dashboard">🏠<span>Home</span></button>
-  <button data-view="magazzino">📦<span>Magazzino</span></button>
-  <button data-view="scadenze">⏰<span>Scadenze</span></button>
-  <button data-view="temperature">🌡️<span>Temperature</span></button>
-  <button data-view="altro">☰<span>Altro</span></button>
+<button data-view="dashboard">🏠<span>Home</span></button>
+<button data-view="magazzino">📦<span>Magazzino</span></button>
+<button data-view="scadenze">⏰<span>Scadenze</span></button>
+<button data-view="temperature">🌡️<span>Temperature</span></button>
+<button data-view="altro">☰<span>Altro</span></button>
 </nav>
-
-<dialog id="modal">
-  <form method="dialog" id="modalForm"></form>
-</dialog>
-
+<dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
 <script type="module" src="app.js"></script>
 </body>
 </html>
