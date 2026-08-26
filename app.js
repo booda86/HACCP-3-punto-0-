@@ -200,7 +200,7 @@ function abbattimentoModal(ex=null){
     <label class="full">Denominazione del prodotto<input name="denominazione" required value="${esc(ex?.denominazione||'')}"></label>
     <label>Lotto N°<input name="lotto" required value="${esc(ex?.lotto||'')}"></label>
     <label>Confezioni N°<input name="confezioni" inputmode="numeric" value="${esc(ex?.confezioni||'')}"></label>
-    <label>Temperatura di abbattimento °C<input name="temperatura" inputmode="decimal" required value="${esc(ex?.temperatura||'')}"></label>
+    <label>Temperatura di abbattimento °C<input name="temperatura" type="text" inputmode="text" autocapitalize="off" autocomplete="off" placeholder="es. -35" required value="${esc(ex?.temperatura||'')}"></label>
     <label>Tempo di abbattimento<input name="tempo" placeholder="es. 90 min" required value="${esc(ex?.tempo||'')}"></label>
     <label class="full">Esito<select name="conforme"><option ${ex?.conforme==='CONFORME'?'selected':''}>CONFORME</option><option ${ex?.conforme==='NON CONFORME'?'selected':''}>NON CONFORME</option></select></label>
     <label class="full">Azione correttiva per Non Conformità<textarea name="azioneCorrettiva">${esc(ex?.azioneCorrettiva||'')}</textarea></label>
@@ -215,13 +215,16 @@ function abbattimentoModal(ex=null){
     e.preventDefault();
     const x=new FormData(f);
     const conforme=x.get('conforme'),azione=x.get('azioneCorrettiva').trim();
+    const temperaturaRaw=String(x.get('temperatura')||'').trim();
+    const temperaturaNum=parseFloat(temperaturaRaw.replace(',','.'));
+    if(Number.isNaN(temperaturaNum))return alert('Inserisci una temperatura valida, ad esempio -35 oppure -18,5.');
     if(conforme==='NON CONFORME'&&!azione)return alert('Per una Non Conformità devi indicare l’azione correttiva.');
     await saveShared('abbattimenti',{
       id:ex?.id||id(),
       denominazione:x.get('denominazione').trim(),
       lotto:x.get('lotto').trim(),
       confezioni:x.get('confezioni').trim(),
-      temperatura:x.get('temperatura').trim(),
+      temperatura:String(temperaturaNum),
       tempo:x.get('tempo').trim(),
       conforme,
       azioneCorrettiva:azione,
@@ -418,10 +421,10 @@ function dailyTempModal(frigo){
   const {m,f}=modalBase(`${existing?'Modifica':'Registra'} temperatura — ${esc(frigo.nome)}`,
   `<div class="form"><label class="full">Data<input value="${fmt(today())}" disabled></label>
   <label class="full">Attrezzatura<input value="${esc(frigo.nome)} — ${esc(frigo.tipo)} (${frigo.min}/${frigo.max} °C)" disabled></label>
-  <label>Temperatura °C<input name="val" required inputmode="decimal" value="${existing?.valore??''}"></label>
+  <label>Temperatura °C<input name="val" required type="text" inputmode="text" autocapitalize="off" autocomplete="off" placeholder="es. -18,5" value="${existing?.valore??''}"></label>
   <label>Operatore<input name="op" value="${esc(existing?.operatore||profileName())}"></label>
   <label class="full">Note / azione correttiva<textarea name="note">${esc(existing?.note||'')}</textarea></label></div>`,
-  async e=>{e.preventDefault();const x=new FormData(f),valore=parseFloat(String(x.get('val')).replace(',','.'));if(Number.isNaN(valore))return alert('Temperatura non valida.');const fuori=valore<Number(frigo.min)||valore>Number(frigo.max),note=x.get('note').trim();if(fuori&&!note)return alert('Temperatura fuori limite: inserisci una nota o azione correttiva.');await saveShared('temperature',{id:fixedId,giorno:today(),frigoId:frigo.id,frigoNome:frigo.nome,frigoTipo:frigo.tipo||'',frigoMin:Number(frigo.min),frigoMax:Number(frigo.max),valore,operatore:(x.get('op')||profileName()).trim(),operatoreUid:currentUser?.uid||'',note,ts:new Date().toISOString()});m.close()});
+  async e=>{e.preventDefault();const x=new FormData(f),valore=parseFloat(String(x.get('val')).trim().replace(',','.'));if(Number.isNaN(valore))return alert('Temperatura non valida.');const fuori=valore<Number(frigo.min)||valore>Number(frigo.max),note=x.get('note').trim();if(fuori&&!note)return alert('Temperatura fuori limite: inserisci una nota o azione correttiva.');await saveShared('temperature',{id:fixedId,giorno:today(),frigoId:frigo.id,frigoNome:frigo.nome,frigoTipo:frigo.tipo||'',frigoMin:Number(frigo.min),frigoMax:Number(frigo.max),valore,operatore:(x.get('op')||profileName()).trim(),operatoreUid:currentUser?.uid||'',note,ts:new Date().toISOString()});m.close()});
 }
 function equipModal(ex=null){
   const {m,f}=modalBase(ex?'Modifica attrezzatura':'Nuova attrezzatura',
