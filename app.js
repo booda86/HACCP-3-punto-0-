@@ -6,24 +6,27 @@ import {
   createUserWithEmailAndPassword, signOut
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot
+  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
 const LOCAL_KEY='haccp_pwa_v1';
 const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[]};
+
 let data={...defaults};
 let view='dashboard';
 let ssopMonth=new Date().toISOString().slice(0,7);
 let currentUser=null;
+let currentProfile=null;
 let ready=false;
 let unsubscribers=[];
 
-const app=initializeApp(firebaseConfig);
-const auth=getAuth(app);
-const db=getFirestore(app);
+const firebaseApp=initializeApp(firebaseConfig);
+const auth=getAuth(firebaseApp);
+const db=getFirestore(firebaseApp);
 
 const esc=s=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const id=()=>crypto.randomUUID?crypto.randomUUID():Date.now()+''+Math.random();
+const today=()=>new Date().toISOString().slice(0,10);
 const fmt=d=>d?new Date(d+(d.length===10?'T12:00:00':'')).toLocaleDateString('it-IT'):'-';
 const fmtDT=d=>new Date(d).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'});
 
@@ -38,27 +41,47 @@ async function saveShared(name,obj){
 }
 async function removeShared(name,docId){await deleteDoc(doc(col(name),docId))}
 
+async function saveUserProfile(profile){
+  if(!currentUser)return;
+  const item={
+    id:currentUser.uid,
+    uid:currentUser.uid,
+    email:currentUser.email||'',
+    nome:(profile.nome||'').trim(),
+    cognome:(profile.cognome||'').trim(),
+    dataNascita:profile.dataNascita||'',
+    updatedAt:new Date().toISOString()
+  };
+  await setDoc(doc(col('utenti'),currentUser.uid),item,{merge:true});
+  currentProfile=item;
+}
+
+async function loadUserProfile(){
+  if(!currentUser)return;
+  const snap=await getDoc(doc(col('utenti'),currentUser.uid));
+  currentProfile=snap.exists()
+    ? {id:snap.id,...snap.data()}
+    : {id:currentUser.uid,uid:currentUser.uid,email:currentUser.email||'',nome:'',cognome:'',dataNascita:''};
+}
+
 function startRealtime(){
   unsubscribers.forEach(u=>u());
   unsubscribers=[];
   for(const name of ['prodotti','temperature','frigoriferi','ssop']){
-    const u=onSnapshot(col(name),snap=>{
+    unsubscribers.push(onSnapshot(col(name),snap=>{
       data[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
       saveLocal();
-      if(ready) render();
-    });
-    unsubscribers.push(u);
+      if(ready)render();
+    }));
   }
 }
 
 async function migrateLocalOnce(){
-  const marker='cloud_migrated_'+WORKSPACE_ID;
-  if(localStorage.getItem(marker)==='1') return;
+  const marker='cloud_migrated_'+WORKSPACE_ID+'_v42complete';
+  if(localStorage.getItem(marker)==='1')return;
   const old=loadLocal();
   for(const name of ['prodotti','temperature','frigoriferi','ssop']){
-    for(const item of (old[name]||[])){
-      await saveShared(name,item);
-    }
+    for(const item of (old[name]||[])) await saveShared(name,item);
   }
   localStorage.setItem(marker,'1');
 }
@@ -67,14 +90,19 @@ onAuthStateChanged(auth,async user=>{
   currentUser=user;
   if(!user){
     ready=false;
+    currentProfile=null;
     showLogin();
     return;
   }
   hideLogin();
   startRealtime();
   await migrateLocalOnce();
+  await loadUserProfile();
   ready=true;
   render();
+  if(!currentProfile?.nome||!currentProfile?.cognome||!currentProfile?.dataNascita){
+    setTimeout(()=>profileModal(true),300);
+  }
 });
 
 function showLogin(){
@@ -82,11 +110,30 @@ function showLogin(){
   if(!d){
     d=document.createElement('dialog');
     d.id='loginGate';
-    d.innerHTML=`<form id="loginForm" style="padding:22px;min-width:min(90vw,420px);font-family:-apple-system">
+    d.innerHTML=`<form id="loginForm" style="padding:22px;min-width:min(92vw,440px);font-family:-apple-system">
       <h2>☁️ HACCP condiviso</h2>
-      <p style="color:#667;line-height:1.45">Accedi per vedere e aggiornare gli stessi dati da tutti i telefoni.</p>
-      <label style="display:block;margin:10px 0">Email<input id="loginEmail" type="email" required style="width:100%;padding:12px;margin-top:6px"></label>
-      <label style="display:block;margin:10px 0">Password<input id="loginPass" type="password" required minlength="6" style="width:100%;padding:12px;margin-top:6px"></label>
+      <p style="color:#667;line-height:1.45">Accedi con il tuo account personale. Tutti gli utenti autorizzati vedono gli stessi dati HACCP.</p>
+
+      <label style="display:block;margin:10px 0">Email
+        <input id="loginEmail" type="email" required style="width:100%;padding:12px;margin-top:6px">
+      </label>
+      <label style="display:block;margin:10px 0">Password
+        <input id="loginPass" type="password" minlength="6" required style="width:100%;padding:12px;margin-top:6px">
+      </label>
+
+      <details style="margin-top:14px;padding:12px;border:1px solid #ddd;border-radius:12px">
+        <summary style="font-weight:800">👤 Dati nuovo utente</summary>
+        <label style="display:block;margin:10px 0">Nome
+          <input id="regNome" style="width:100%;padding:12px;margin-top:6px">
+        </label>
+        <label style="display:block;margin:10px 0">Cognome
+          <input id="regCognome" style="width:100%;padding:12px;margin-top:6px">
+        </label>
+        <label style="display:block;margin:10px 0">Data di nascita
+          <input id="regNascita" type="date" style="width:100%;padding:12px;margin-top:6px">
+        </label>
+      </details>
+
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
         <button type="submit">Accedi</button>
         <button type="button" id="registerBtn" class="ghost">Crea account</button>
@@ -94,33 +141,55 @@ function showLogin(){
       <div id="loginMsg" style="margin-top:12px;color:#b3261e"></div>
     </form>`;
     document.body.appendChild(d);
-    const f=d.querySelector('#loginForm');
-    f.onsubmit=async e=>{
+
+    d.querySelector('#loginForm').onsubmit=async e=>{
       e.preventDefault();
-      const email=d.querySelector('#loginEmail').value.trim();
-      const pass=d.querySelector('#loginPass').value;
       const msg=d.querySelector('#loginMsg');
-      try{msg.textContent='Accesso...';await signInWithEmailAndPassword(auth,email,pass);msg.textContent='';}
-      catch(err){msg.textContent=humanAuthError(err)}
+      try{
+        msg.textContent='Accesso...';
+        await signInWithEmailAndPassword(auth,d.querySelector('#loginEmail').value.trim(),d.querySelector('#loginPass').value);
+        msg.textContent='';
+      }catch{
+        msg.textContent='Email o password non corretti.';
+      }
     };
+
     d.querySelector('#registerBtn').onclick=async()=>{
-      const email=d.querySelector('#loginEmail').value.trim();
-      const pass=d.querySelector('#loginPass').value;
+      const nome=d.querySelector('#regNome').value.trim();
+      const cognome=d.querySelector('#regCognome').value.trim();
+      const dataNascita=d.querySelector('#regNascita').value;
       const msg=d.querySelector('#loginMsg');
-      try{msg.textContent='Creazione account...';await createUserWithEmailAndPassword(auth,email,pass);msg.textContent='';}
-      catch(err){msg.textContent=humanAuthError(err)}
+
+      if(!nome||!cognome||!dataNascita){
+        msg.textContent='Compila nome, cognome e data di nascita.';
+        return;
+      }
+
+      try{
+        const cred=await createUserWithEmailAndPassword(
+          auth,
+          d.querySelector('#loginEmail').value.trim(),
+          d.querySelector('#loginPass').value
+        );
+        currentUser=cred.user;
+        await saveUserProfile({nome,cognome,dataNascita});
+      }catch{
+        msg.textContent='Errore nella creazione account.';
+      }
     };
   }
   if(!d.open)d.showModal();
 }
-function hideLogin(){const d=document.getElementById('loginGate');if(d?.open)d.close()}
-function humanAuthError(e){
-  const c=e?.code||'';
-  if(c.includes('invalid-credential'))return'Email o password non corretti.';
-  if(c.includes('email-already-in-use'))return'Questa email è già registrata.';
-  if(c.includes('weak-password'))return'Usa una password di almeno 6 caratteri.';
-  if(c.includes('invalid-email'))return'Email non valida.';
-  return 'Errore di accesso. Riprova.';
+
+function hideLogin(){
+  const d=document.getElementById('loginGate');
+  if(d?.open)d.close();
+}
+
+function profileName(){
+  return [currentProfile?.nome,currentProfile?.cognome].filter(Boolean).join(' ').trim()
+    || currentUser?.email
+    || 'Utente';
 }
 
 function daysTo(x){
@@ -130,16 +199,32 @@ function daysTo(x){
   return Math.round((b-a)/86400000);
 }
 function badge(x){
-  let d=daysTo(x);
+  const d=daysTo(x);
   if(d===null)return'<span class="badge">Nessuna scadenza</span>';
   if(d<0)return`<span class="badge danger">Scaduto da ${-d} gg</span>`;
   if(d===0)return'<span class="badge danger">Scade oggi</span>';
   if(d<=3)return`<span class="badge warn">Scade tra ${d} gg</span>`;
   return`<span class="badge">Scade ${fmt(x)}</span>`;
 }
-function lastTemp(fid){return data.temperature.filter(x=>x.frigoId===fid).sort((a,b)=>b.ts.localeCompare(a.ts))[0]}
-function tempOut(f,t){return !!(t&&(Number(t.valore)<Number(f.min)||Number(t.valore)>Number(f.max)))}
-function ssopNC(r){return['attrezzaturePO','attrezzaturePS','igieneAttrezzaturePO','igieneAttrezzaturePS','localiPO','localiPS','igieneLocaliPO','igieneLocaliPS','personale'].some(k=>r[k]==='NC')}
+function ssopNC(r){
+  return ['attrezzaturePO','attrezzaturePS','igieneAttrezzaturePO','igieneAttrezzaturePS','localiPO','localiPS','igieneLocaliPO','igieneLocaliPS','personale']
+    .some(k=>r[k]==='NC');
+}
+function tempOut(f,t){
+  return !!(t&&(Number(t.valore)<Number(f.min)||Number(t.valore)>Number(f.max)));
+}
+function tempTodayFor(fid){
+  const day=today();
+  return data.temperature.find(t=>
+    String(t.frigoId)===String(fid) &&
+    (t.giorno===day || String(t.ts||'').slice(0,10)===day)
+  );
+}
+function dailyStatus(){
+  const total=data.frigoriferi.length;
+  const done=data.frigoriferi.filter(f=>!!tempTodayFor(f.id)).length;
+  return {total,done,missing:total-done};
+}
 
 function render(){
   if(!ready)return;
@@ -157,84 +242,483 @@ function render(){
 
 function dashboard(){
   const crit=data.prodotti.filter(p=>{let d=daysTo(p.scadenza);return d!==null&&d<=7}).length;
-  const today=new Date().toISOString().slice(0,10),done=data.ssop.some(r=>r.data===today);
-  return `<section class="hero"><h2>HACCP condiviso ☁️</h2><p>${esc(currentUser?.email||'')} • dati sincronizzati</p></section>
+  const ssopDone=data.ssop.some(r=>r.data===today());
+  const ds=dailyStatus();
+
+  return `<section class="hero">
+    <h2>HACCP condiviso ☁️</h2>
+    <p>${esc(profileName())} • ${fmt(today())}</p>
+  </section>
+
   <div class="grid">
-    <div class="card"><b>Scadenze critiche</b><div class="metric ${crit?'danger':'ok'}">${crit}</div></div>
-    <div class="card"><b>SSOP oggi</b><div class="metric ${done?'ok':''}">${done?'✓':'—'}</div><div class="sub">${done?'Compilato':'Da compilare'}</div></div>
+    <div class="card">
+      <b>Temperature oggi</b>
+      <div class="metric ${ds.missing?'danger':'ok'}">${ds.done}/${ds.total}</div>
+      <div class="sub">${ds.missing?ds.missing+' mancanti':'Tutte registrate'}</div>
+    </div>
+
+    <div class="card">
+      <b>SSOP oggi</b>
+      <div class="metric ${ssopDone?'ok':''}">${ssopDone?'✓':'—'}</div>
+      <div class="sub">${ssopDone?'Compilato':'Da compilare'}</div>
+    </div>
+
+    <div class="card">
+      <b>Scadenze critiche</b>
+      <div class="metric ${crit?'danger':'ok'}">${crit}</div>
+    </div>
   </div>
-  <div class="title"><h2>Temperature</h2><button data-a="newT">+ Registra</button></div>
-  <div class="grid">${data.frigoriferi.map(f=>{let t=lastTemp(f.id);return`<div class="card"><b>${f.tipo==='Congelatore'?'❄️':'🧊'} ${esc(f.nome)}</b><div class="metric ${tempOut(f,t)?'danger':'ok'}">${t?t.valore.toFixed(1)+' °C':'--'}</div><div class="sub">${f.min}/${f.max} °C</div></div>`}).join('')||'<div class="card">Nessuna attrezzatura</div>'}</div>
-  <div class="title"><h2>Azioni rapide</h2></div>
-  <div class="grid"><button data-a="newP">➕ Nuovo prodotto</button><button class="ghost" data-a="goSSOP">🧼 Controllo SSOP</button></div>`;
+
+  <div class="title"><h2>Controllo giornaliero frighi</h2><button data-a="goTemps">Apri</button></div>
+  <div class="list">
+    ${data.frigoriferi.map(f=>{
+      const t=tempTodayFor(f.id);
+      return `<div class="item">
+        <div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div>
+        <div class="grow">
+          <div class="name">${esc(f.nome)}</div>
+          <div class="sub">${esc(f.tipo)} • Limiti ${f.min}/${f.max} °C</div>
+          ${t
+            ? `<span class="badge ${tempOut(f,t)?'danger':''}">Registrata oggi: ${Number(t.valore).toFixed(1)} °C ${tempOut(f,t)?'• FUORI LIMITE':'• OK'}</span>`
+            : `<span class="badge danger">MANCANTE OGGI</span>`}
+        </div>
+        <button data-temp-eq="${f.id}">${t?'Modifica':'Registra'}</button>
+      </div>`;
+    }).join('') || '<div class="empty">Nessuna attrezzatura configurata.</div>'}
+  </div>`;
 }
+
 function inv(items){
-  return items.length?items.map(p=>`<div class="item"><div class="icon">📦</div><div class="grow"><div class="name">${esc(p.nome)}</div><div class="sub">${esc(p.categoria||'')} • Lotto ${esc(p.lotto)}</div>${badge(p.scadenza)}</div><button class="dangerBtn" data-del="${p.id}">✕</button></div>`).join(''):'<div class="empty">Nessun prodotto.</div>';
+  return items.length
+    ? items.map(p=>`<div class="item">
+        <div class="icon">📦</div>
+        <div class="grow">
+          <div class="name">${esc(p.nome)}</div>
+          <div class="sub">${esc(p.categoria||'')} • Lotto ${esc(p.lotto)}</div>
+          ${badge(p.scadenza)}
+        </div>
+        <button class="dangerBtn" data-del="${p.id}">✕</button>
+      </div>`).join('')
+    : '<div class="empty">Nessun prodotto.</div>';
 }
-function magazzino(){return`<div class="title"><h2>Magazzino</h2><button data-a="newP">+ Nuovo</button></div><input id="search" class="search" placeholder="Cerca prodotto, lotto..."><div id="inv" class="list" style="margin-top:12px">${inv(data.prodotti)}</div>`}
-function scadenze(){return`<div class="title"><h2>Scadenze</h2></div><div class="list">${inv([...data.prodotti].filter(p=>p.scadenza).sort((a,b)=>a.scadenza.localeCompare(b.scadenza)))}</div>`}
+
+function magazzino(){
+  return `<div class="title"><h2>Magazzino</h2><button data-a="newP">+ Nuovo</button></div>
+  <input id="search" class="search" placeholder="Cerca prodotto, lotto...">
+  <div id="inv" class="list" style="margin-top:12px">${inv(data.prodotti)}</div>`;
+}
+
+function scadenze(){
+  return `<div class="title"><h2>Scadenze</h2></div>
+  <div class="list">${inv([...data.prodotti].filter(p=>p.scadenza).sort((a,b)=>a.scadenza.localeCompare(b.scadenza)))}</div>`;
+}
+
 function temperature(){
-  return`<div class="title"><h2>Registro temperature</h2><button data-a="newT">+ Registra</button></div><div class="list">${[...data.temperature].sort((a,b)=>b.ts.localeCompare(a.ts)).map(t=>{let f=data.frigoriferi.find(x=>x.id===t.frigoId);return`<div class="item"><div class="icon">🌡️</div><div class="grow"><div class="name">${esc(f?.nome||'Attrezzatura')}</div><div class="sub">${fmtDT(t.ts)}${t.operatore?' • '+esc(t.operatore):''}</div><span class="badge ${f&&tempOut(f,t)?'danger':''}">${Number(t.valore).toFixed(1)} °C ${f&&tempOut(f,t)?'• FUORI LIMITE':'• OK'}</span>${t.note?`<div class="sub">${esc(t.note)}</div>`:''}</div></div>`}).join('')||'<div class="empty">Nessuna temperatura.</div>'}</div>`;
+  return `<div class="title"><h2>Temperature giornaliere</h2></div>
+
+  <div class="card">
+    <b>Una registrazione al giorno per ogni attrezzatura</b>
+    <div class="sub">Se il controllo di oggi esiste già, viene modificato invece di crearne uno nuovo.</div>
+  </div>
+
+  <div class="list" style="margin-top:12px">
+    ${data.frigoriferi.map(f=>{
+      const t=tempTodayFor(f.id);
+      return `<div class="item">
+        <div class="icon">🌡️</div>
+        <div class="grow">
+          <div class="name">${esc(f.nome)}</div>
+          <div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C</div>
+          ${t
+            ? `<span class="badge ${tempOut(f,t)?'danger':''}">${Number(t.valore).toFixed(1)} °C • ${esc(t.operatore||'')}</span>`
+            : `<span class="badge danger">Non registrata oggi</span>`}
+        </div>
+        <button data-temp-eq="${f.id}">${t?'Modifica':'Registra'}</button>
+      </div>`;
+    }).join('') || '<div class="empty">Nessun frigorifero/congelatore.</div>'}
+  </div>
+
+  <div class="title"><h2>Storico temperature</h2></div>
+  <div class="list">
+    ${[...data.temperature]
+      .sort((a,b)=>(b.giorno||b.ts||'').localeCompare(a.giorno||a.ts||''))
+      .map(t=>`<div class="item">
+        <div class="icon">📅</div>
+        <div class="grow">
+          <div class="name">${esc(t.frigoNome||'Attrezzatura')}</div>
+          <div class="sub">${fmt(t.giorno||String(t.ts||'').slice(0,10))} • ${esc(t.operatore||'')}</div>
+          <span class="badge">${Number(t.valore).toFixed(1)} °C</span>
+        </div>
+      </div>`).join('') || '<div class="empty">Nessuno storico.</div>'}
+  </div>`;
 }
+
 function attrezzature(){
-  return`<div class="title"><h2>Attrezzature</h2><button data-a="newE">+ Aggiungi</button></div><div class="list">${data.frigoriferi.map(f=>`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C${f.posizione?' • '+esc(f.posizione):''}</div></div><button class="ghost" data-edit="${f.id}">✏️</button><button class="dangerBtn" data-del-eq="${f.id}">✕</button></div>`).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`;
+  return `<div class="title"><h2>Attrezzature</h2><button data-a="newE">+ Aggiungi</button></div>
+  <div class="list">
+    ${data.frigoriferi.map(f=>`<div class="item">
+      <div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div>
+      <div class="grow">
+        <div class="name">${esc(f.nome)}</div>
+        <div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C${f.posizione?' • '+esc(f.posizione):''}</div>
+      </div>
+      <button class="ghost" data-edit="${f.id}">✏️</button>
+      <button class="dangerBtn" data-del-eq="${f.id}">✕</button>
+    </div>`).join('') || '<div class="empty">Nessuna attrezzatura.</div>'}
+  </div>`;
 }
+
 function ssopView(){
-  let[y,m]=ssopMonth.split('-').map(Number),n=new Date(y,m,0).getDate(),rows='';
+  let [y,m]=ssopMonth.split('-').map(Number);
+  let n=new Date(y,m,0).getDate();
+  let rows='';
+
   for(let d=1;d<=n;d++){
-    let dt=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,r=data.ssop.find(x=>x.data===dt);
-    rows+=`<div class="item"><div class="icon">${r?(ssopNC(r)?'⚠️':'✅'):'📋'}</div><div class="grow"><div class="name">${fmt(dt)}</div><div class="sub">${r?(ssopNC(r)?'Presente NC':'Tutto conforme'):'Non compilato'}</div></div><button data-ssop="${dt}">${r?'Apri':'Compila'}</button></div>`;
+    const dt=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const r=data.ssop.find(x=>x.data===dt);
+
+    rows+=`<div class="item">
+      <div class="icon">${r?(ssopNC(r)?'⚠️':'✅'):'📋'}</div>
+      <div class="grow">
+        <div class="name">${fmt(dt)}</div>
+        <div class="sub">${r?(ssopNC(r)?'Presente NC':'Tutto conforme'):'Non compilato'}</div>
+      </div>
+      <button data-ssop="${dt}">${r?'Apri':'Compila'}</button>
+    </div>`;
   }
-  return`<div class="title"><h2>Controllo SSOP</h2><button data-a="ssopPDF">PDF</button></div><div class="card"><b>C = Conforme • NC = Non Conforme</b><div class="sub">PO = Preoperativa • PS = Postoperativa</div></div><div class="title"><h2>Mese</h2></div><input id="ssopMonth" type="month" value="${ssopMonth}"><div class="list" style="margin-top:12px">${rows}</div>`;
+
+  return `<div class="title"><h2>Controllo SSOP</h2><button data-a="ssopPDF">PDF</button></div>
+  <div class="card"><b>C = Conforme • NC = Non Conforme</b><div class="sub">PO = Preoperativa • PS = Postoperativa</div></div>
+  <div class="title"><h2>Mese</h2></div>
+  <input id="ssopMonth" type="month" value="${ssopMonth}">
+  <div class="list" style="margin-top:12px">${rows}</div>`;
 }
+
 function altro(){
-  return`<div class="title"><h2>Altro</h2></div><div class="list">
-  <div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div>
-  <div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div>
-  <div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account condiviso</div><div class="sub">${esc(currentUser?.email||'')}</div></div><button data-a="logout">Esci</button></div>
+  return `<div class="title"><h2>Altro</h2></div>
+  <div class="list">
+    <div class="item">
+      <div class="icon">👤</div>
+      <div class="grow">
+        <div class="name">${esc(profileName())}</div>
+        <div class="sub">${esc(currentUser?.email||'')}<br>${currentProfile?.dataNascita?'Nato/a il '+fmt(currentProfile.dataNascita):'Data di nascita non inserita'}</div>
+      </div>
+      <button data-a="profile">Profilo</button>
+    </div>
+
+    <div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div>
+    <div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div>
+    <div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div><div class="sub">Dati sincronizzati</div></div><button data-a="logout">Esci</button></div>
   </div>`;
 }
 
 function bind(){
   document.querySelectorAll('[data-a="newP"]').forEach(b=>b.onclick=productModal);
-  document.querySelectorAll('[data-a="newT"]').forEach(b=>b.onclick=tempModal);
   document.querySelectorAll('[data-a="newE"]').forEach(b=>b.onclick=()=>equipModal());
   document.querySelectorAll('[data-a="goE"]').forEach(b=>b.onclick=()=>{view='attrezzature';render()});
   document.querySelectorAll('[data-a="goSSOP"]').forEach(b=>b.onclick=()=>{view='ssop';render()});
+  document.querySelectorAll('[data-a="goTemps"]').forEach(b=>b.onclick=()=>{view='temperature';render()});
   document.querySelectorAll('[data-a="ssopPDF"]').forEach(b=>b.onclick=ssopPDF);
+  document.querySelectorAll('[data-a="profile"]').forEach(b=>b.onclick=()=>profileModal(false));
   document.querySelectorAll('[data-a="logout"]').forEach(b=>b.onclick=()=>signOut(auth));
+
+  document.querySelectorAll('[data-temp-eq]').forEach(b=>{
+    b.onclick=()=>{
+      const f=data.frigoriferi.find(x=>String(x.id)===String(b.dataset.tempEq));
+      if(f)dailyTempModal(f);
+    };
+  });
+
   document.querySelectorAll('[data-ssop]').forEach(b=>b.onclick=()=>ssopModal(b.dataset.ssop));
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>equipModal(data.frigoriferi.find(x=>x.id===b.dataset.edit)));
-  document.querySelectorAll('[data-del-eq]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare attrezzatura?'))await removeShared('frigoriferi',b.dataset.delEq)});
-  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questo lotto?'))await removeShared('prodotti',b.dataset.del)});
-  let sm=document.getElementById('ssopMonth');if(sm)sm.onchange=()=>{ssopMonth=sm.value;render()};
-  let s=document.getElementById('search');if(s)s.oninput=()=>{let q=s.value.toLowerCase();document.getElementById('inv').innerHTML=inv(data.prodotti.filter(p=>[p.nome,p.lotto,p.categoria].some(x=>(x||'').toLowerCase().includes(q))));bind()};
+
+  document.querySelectorAll('[data-del-eq]').forEach(b=>{
+    b.onclick=async()=>{
+      if(confirm('Eliminare attrezzatura?')) await removeShared('frigoriferi',b.dataset.delEq);
+    };
+  });
+
+  document.querySelectorAll('[data-del]').forEach(b=>{
+    b.onclick=async()=>{
+      if(confirm('Eliminare questo lotto?')) await removeShared('prodotti',b.dataset.del);
+    };
+  });
+
+  const sm=document.getElementById('ssopMonth');
+  if(sm)sm.onchange=()=>{ssopMonth=sm.value;render()};
+
+  const s=document.getElementById('search');
+  if(s)s.oninput=()=>{
+    const q=s.value.toLowerCase();
+    document.getElementById('inv').innerHTML=inv(
+      data.prodotti.filter(p=>[p.nome,p.lotto,p.categoria].some(x=>(x||'').toLowerCase().includes(q)))
+    );
+    bind();
+  };
 }
 
 function modalBase(title,html,onSubmit){
-  const m=document.getElementById('modal'),f=document.getElementById('modalForm');f.className='modal';
-  f.innerHTML=`<h2>${title}</h2>${html}<div class="actions"><button type="button" class="ghost" id="cancel">Annulla</button><button>Salva</button></div>`;
-  f.onsubmit=onSubmit;f.querySelector('#cancel').onclick=()=>m.close();m.showModal();return{m,f};
-}
-function productModal(){
-  const {m,f}=modalBase('Nuovo prodotto',`<div class="form"><label>Nome<input name="nome" required></label><label>Categoria<input name="cat"></label><label>Lotto<input name="lotto" required></label><label>Scadenza<input type="date" name="scad"></label></div>`,async e=>{e.preventDefault();let x=new FormData(f);await saveShared('prodotti',{id:id(),nome:x.get('nome').trim(),categoria:x.get('cat').trim(),lotto:x.get('lotto').trim(),scadenza:x.get('scad')});m.close()});
-}
-function tempModal(){
-  if(!data.frigoriferi.length)return alert('Aggiungi prima un frigorifero o congelatore.');
-  const {m,f}=modalBase('Registra temperatura',`<div class="form"><label class="full">Attrezzatura<select name="frigo">${data.frigoriferi.map(x=>`<option value="${x.id}">${esc(x.nome)} (${x.min}/${x.max} °C)</option>`).join('')}</select></label><label>Temperatura °C<input name="val" required></label><label>Operatore<input name="op"></label><label class="full">Note<textarea name="note"></textarea></label></div>`,async e=>{e.preventDefault();let x=new FormData(f),v=parseFloat(String(x.get('val')).replace(',','.'));if(Number.isNaN(v))return alert('Temperatura non valida');await saveShared('temperature',{id:id(),frigoId:x.get('frigo'),valore:v,operatore:x.get('op').trim(),note:x.get('note').trim(),ts:new Date().toISOString()});m.close()});
-}
-function equipModal(ex=null){
-  const {m,f}=modalBase(ex?'Modifica attrezzatura':'Nuova attrezzatura',`<div class="form"><label class="full">Nome<input name="nome" required value="${esc(ex?.nome||'')}"></label><label>Tipo<select name="tipo"><option ${ex?.tipo==='Frigorifero'?'selected':''}>Frigorifero</option><option ${ex?.tipo==='Congelatore'?'selected':''}>Congelatore</option></select></label><label>Posizione<input name="pos" value="${esc(ex?.posizione||'')}"></label><label>Min °C<input name="min" value="${ex?.min??0}"></label><label>Max °C<input name="max" value="${ex?.max??4}"></label></div>`,async e=>{e.preventDefault();let x=new FormData(f),min=parseFloat(String(x.get('min')).replace(',','.')),max=parseFloat(String(x.get('max')).replace(',','.'));if(Number.isNaN(min)||Number.isNaN(max)||min>=max)return alert('Controlla i limiti di temperatura');await saveShared('frigoriferi',{id:ex?.id||id(),nome:x.get('nome').trim(),tipo:x.get('tipo'),posizione:x.get('pos').trim(),min,max});m.close()});
-}
-function sel(n,l,v=''){return`<label class="full">${l}<select name="${n}"><option value="">—</option><option ${v==='C'?'selected':''}>C</option><option ${v==='NC'?'selected':''}>NC</option></select></label>`}
-function ssopModal(dt){
-  let ex=data.ssop.find(x=>x.data===dt)||{data:dt};
-  const {m,f}=modalBase(`SSOP — ${fmt(dt)}`,`<div class="form">${sel('attrezzaturePO','Idoneità attrezzature — PO',ex.attrezzaturePO)}${sel('attrezzaturePS','Idoneità attrezzature — PS',ex.attrezzaturePS)}${sel('igieneAttrezzaturePO','Igiene attrezzature — PO',ex.igieneAttrezzaturePO)}${sel('igieneAttrezzaturePS','Igiene attrezzature — PS',ex.igieneAttrezzaturePS)}${sel('localiPO','Idoneità locali — PO',ex.localiPO)}${sel('localiPS','Idoneità locali — PS',ex.localiPS)}${sel('igieneLocaliPO','Igiene locali — PO',ex.igieneLocaliPO)}${sel('igieneLocaliPS','Igiene locali — PS',ex.igieneLocaliPS)}${sel('personale','Igiene del personale',ex.personale)}<label class="full">Verificatore / firma<input name="ver" value="${esc(ex.verificatore||'')}"></label><label class="full">Non conformità<textarea name="nc">${esc(ex.nonConformita||'')}</textarea></label><label class="full">Azione correttiva<textarea name="ac">${esc(ex.azioneCorrettiva||'')}</textarea></label></div>`,async e=>{e.preventDefault();let x=new FormData(f),r={id:ex.id||id(),data:dt,attrezzaturePO:x.get('attrezzaturePO'),attrezzaturePS:x.get('attrezzaturePS'),igieneAttrezzaturePO:x.get('igieneAttrezzaturePO'),igieneAttrezzaturePS:x.get('igieneAttrezzaturePS'),localiPO:x.get('localiPO'),localiPS:x.get('localiPS'),igieneLocaliPO:x.get('igieneLocaliPO'),igieneLocaliPS:x.get('igieneLocaliPS'),personale:x.get('personale'),verificatore:x.get('ver').trim(),nonConformita:x.get('nc').trim(),azioneCorrettiva:x.get('ac').trim()};if(ssopNC(r)&&(!r.nonConformita||!r.azioneCorrettiva))return alert('Con una NC devi indicare non conformità e azione correttiva.');await saveShared('ssop',r);m.close()});
-}
-function ssopPDF(){
-  let rows=data.ssop.filter(r=>r.data.startsWith(ssopMonth)).sort((a,b)=>a.data.localeCompare(b.data)),w=open('','_blank'),v=x=>x||'—';
-  w.document.write(`<html><head><style>body{font-family:Arial;padding:18px;font-size:10px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #777;padding:4px;text-align:center}</style></head><body><h1>CONTROLLO SSOP</h1><h2>${ssopMonth}</h2><table><tr><th>Giorno</th><th>Id.Att PO</th><th>Id.Att PS</th><th>Ig.Att PO</th><th>Ig.Att PS</th><th>Id.Loc PO</th><th>Id.Loc PS</th><th>Ig.Loc PO</th><th>Ig.Loc PS</th><th>Pers.</th><th>Verificatore</th></tr>${rows.map(r=>`<tr><td>${Number(r.data.slice(-2))}</td><td>${v(r.attrezzaturePO)}</td><td>${v(r.attrezzaturePS)}</td><td>${v(r.igieneAttrezzaturePO)}</td><td>${v(r.igieneAttrezzaturePS)}</td><td>${v(r.localiPO)}</td><td>${v(r.localiPS)}</td><td>${v(r.igieneLocaliPO)}</td><td>${v(r.igieneLocaliPS)}</td><td>${v(r.personale)}</td><td>${esc(r.verificatore)}</td></tr>`).join('')}</table><script>onload=()=>print()</script></body></html>`);w.document.close();
+  const m=document.getElementById('modal');
+  const f=document.getElementById('modalForm');
+  f.className='modal';
+  f.innerHTML=`<h2>${title}</h2>${html}<div class="actions">
+    <button type="button" class="ghost" id="cancel">Annulla</button>
+    <button>Salva</button>
+  </div>`;
+  f.onsubmit=onSubmit;
+  f.querySelector('#cancel').onclick=()=>m.close();
+  m.showModal();
+  return {m,f};
 }
 
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
-if('serviceWorker'in navigator)navigator.serviceWorker.register('./service-worker.js');
+function profileModal(required=false){
+  const ex=currentProfile||{};
+  const {m,f}=modalBase(
+    required?'Completa il profilo':'Profilo utente',
+    `<div class="form">
+      <label class="full">Nome<input name="nome" required value="${esc(ex.nome||'')}"></label>
+      <label class="full">Cognome<input name="cognome" required value="${esc(ex.cognome||'')}"></label>
+      <label class="full">Data di nascita<input name="dataNascita" type="date" required value="${esc(ex.dataNascita||'')}"></label>
+      <label class="full">Email<input value="${esc(currentUser?.email||'')}" disabled></label>
+    </div>`,
+    async e=>{
+      e.preventDefault();
+      const x=new FormData(f);
+      await saveUserProfile({
+        nome:x.get('nome'),
+        cognome:x.get('cognome'),
+        dataNascita:x.get('dataNascita')
+      });
+      m.close();
+      render();
+    }
+  );
+  if(required)f.querySelector('#cancel').style.display='none';
+}
+
+function productModal(){
+  const {m,f}=modalBase(
+    'Nuovo prodotto',
+    `<div class="form">
+      <label>Nome<input name="nome" required></label>
+      <label>Categoria<input name="cat"></label>
+      <label>Lotto<input name="lotto" required></label>
+      <label>Scadenza<input type="date" name="scad"></label>
+    </div>`,
+    async e=>{
+      e.preventDefault();
+      const x=new FormData(f);
+      await saveShared('prodotti',{
+        id:id(),
+        nome:x.get('nome').trim(),
+        categoria:x.get('cat').trim(),
+        lotto:x.get('lotto').trim(),
+        scadenza:x.get('scad'),
+        inseritoDa:profileName(),
+        inseritoDaUid:currentUser?.uid||''
+      });
+      m.close();
+    }
+  );
+}
+
+function dailyTempModal(frigo){
+  const existing=tempTodayFor(frigo.id);
+  const fixedId=`${frigo.id}_${today()}`;
+
+  const {m,f}=modalBase(
+    `${existing?'Modifica':'Registra'} temperatura — ${esc(frigo.nome)}`,
+    `<div class="form">
+      <label class="full">Data
+        <input value="${fmt(today())}" disabled>
+      </label>
+      <label class="full">Attrezzatura
+        <input value="${esc(frigo.nome)} — ${esc(frigo.tipo)} (${frigo.min}/${frigo.max} °C)" disabled>
+      </label>
+      <label>Temperatura °C
+        <input name="val" required inputmode="decimal" value="${existing?.valore ?? ''}">
+      </label>
+      <label>Operatore
+        <input name="op" value="${esc(existing?.operatore||profileName())}">
+      </label>
+      <label class="full">Note / azione correttiva
+        <textarea name="note">${esc(existing?.note||'')}</textarea>
+      </label>
+    </div>`,
+    async e=>{
+      e.preventDefault();
+      const x=new FormData(f);
+      const valore=parseFloat(String(x.get('val')).replace(',','.'));
+      if(Number.isNaN(valore))return alert('Temperatura non valida.');
+
+      const fuori=valore<Number(frigo.min)||valore>Number(frigo.max);
+      const note=x.get('note').trim();
+
+      if(fuori && !note){
+        return alert('La temperatura è fuori limite: inserisci una nota o azione correttiva.');
+      }
+
+      await saveShared('temperature',{
+        id:fixedId,
+        giorno:today(),
+        frigoId:frigo.id,
+        frigoNome:frigo.nome,
+        frigoTipo:frigo.tipo||'',
+        frigoMin:Number(frigo.min),
+        frigoMax:Number(frigo.max),
+        valore,
+        operatore:(x.get('op')||profileName()).trim(),
+        operatoreUid:currentUser?.uid||'',
+        note,
+        ts:new Date().toISOString()
+      });
+
+      m.close();
+    }
+  );
+}
+
+function equipModal(ex=null){
+  const {m,f}=modalBase(
+    ex?'Modifica attrezzatura':'Nuova attrezzatura',
+    `<div class="form">
+      <label class="full">Nome<input name="nome" required value="${esc(ex?.nome||'')}"></label>
+      <label>Tipo<select name="tipo">
+        <option ${ex?.tipo==='Frigorifero'?'selected':''}>Frigorifero</option>
+        <option ${ex?.tipo==='Congelatore'?'selected':''}>Congelatore</option>
+      </select></label>
+      <label>Posizione<input name="pos" value="${esc(ex?.posizione||'')}"></label>
+      <label>Min °C<input name="min" required value="${ex?.min??0}"></label>
+      <label>Max °C<input name="max" required value="${ex?.max??4}"></label>
+    </div>`,
+    async e=>{
+      e.preventDefault();
+      const x=new FormData(f);
+      const min=parseFloat(String(x.get('min')).replace(',','.'));
+      const max=parseFloat(String(x.get('max')).replace(',','.'));
+
+      if(Number.isNaN(min)||Number.isNaN(max)||min>=max){
+        return alert('Controlla i limiti di temperatura.');
+      }
+
+      await saveShared('frigoriferi',{
+        id:ex?.id||id(),
+        nome:x.get('nome').trim(),
+        tipo:x.get('tipo'),
+        posizione:x.get('pos').trim(),
+        min,max
+      });
+
+      m.close();
+    }
+  );
+}
+
+function sel(n,l,v=''){
+  return `<label class="full">${l}<select name="${n}">
+    <option value="">—</option>
+    <option ${v==='C'?'selected':''}>C</option>
+    <option ${v==='NC'?'selected':''}>NC</option>
+  </select></label>`;
+}
+
+function ssopModal(dt){
+  const ex=data.ssop.find(x=>x.data===dt)||{data:dt};
+
+  const {m,f}=modalBase(
+    `SSOP — ${fmt(dt)}`,
+    `<div class="form">
+      ${sel('attrezzaturePO','Idoneità attrezzature — PO',ex.attrezzaturePO)}
+      ${sel('attrezzaturePS','Idoneità attrezzature — PS',ex.attrezzaturePS)}
+      ${sel('igieneAttrezzaturePO','Igiene attrezzature — PO',ex.igieneAttrezzaturePO)}
+      ${sel('igieneAttrezzaturePS','Igiene attrezzature — PS',ex.igieneAttrezzaturePS)}
+      ${sel('localiPO','Idoneità locali — PO',ex.localiPO)}
+      ${sel('localiPS','Idoneità locali — PS',ex.localiPS)}
+      ${sel('igieneLocaliPO','Igiene locali — PO',ex.igieneLocaliPO)}
+      ${sel('igieneLocaliPS','Igiene locali — PS',ex.igieneLocaliPS)}
+      ${sel('personale','Igiene del personale',ex.personale)}
+
+      <label class="full">Verificatore / firma
+        <input name="ver" value="${esc(ex.verificatore||profileName())}">
+      </label>
+
+      <label class="full">Non conformità
+        <textarea name="nc">${esc(ex.nonConformita||'')}</textarea>
+      </label>
+
+      <label class="full">Azione correttiva
+        <textarea name="ac">${esc(ex.azioneCorrettiva||'')}</textarea>
+      </label>
+    </div>`,
+    async e=>{
+      e.preventDefault();
+      const x=new FormData(f);
+
+      const r={
+        id:ex.id||id(),
+        data:dt,
+        attrezzaturePO:x.get('attrezzaturePO'),
+        attrezzaturePS:x.get('attrezzaturePS'),
+        igieneAttrezzaturePO:x.get('igieneAttrezzaturePO'),
+        igieneAttrezzaturePS:x.get('igieneAttrezzaturePS'),
+        localiPO:x.get('localiPO'),
+        localiPS:x.get('localiPS'),
+        igieneLocaliPO:x.get('igieneLocaliPO'),
+        igieneLocaliPS:x.get('igieneLocaliPS'),
+        personale:x.get('personale'),
+        verificatore:x.get('ver').trim(),
+        verificatoreUid:currentUser?.uid||'',
+        nonConformita:x.get('nc').trim(),
+        azioneCorrettiva:x.get('ac').trim()
+      };
+
+      if(ssopNC(r)&&(!r.nonConformita||!r.azioneCorrettiva)){
+        return alert('Con una NC devi indicare non conformità e azione correttiva.');
+      }
+
+      await saveShared('ssop',r);
+      m.close();
+    }
+  );
+}
+
+function ssopPDF(){
+  const rows=data.ssop.filter(r=>r.data.startsWith(ssopMonth)).sort((a,b)=>a.data.localeCompare(b.data));
+  const w=open('','_blank');
+  const v=x=>x||'—';
+
+  w.document.write(`<html><head><style>
+    body{font-family:Arial;padding:18px;font-size:10px}
+    table{border-collapse:collapse;width:100%}
+    td,th{border:1px solid #777;padding:4px;text-align:center}
+  </style></head><body>
+    <h1>CONTROLLO SSOP</h1>
+    <h2>${ssopMonth}</h2>
+    <table>
+      <tr>
+        <th>Giorno</th><th>Id.Att PO</th><th>Id.Att PS</th><th>Ig.Att PO</th><th>Ig.Att PS</th>
+        <th>Id.Loc PO</th><th>Id.Loc PS</th><th>Ig.Loc PO</th><th>Ig.Loc PS</th><th>Pers.</th><th>Verificatore</th>
+      </tr>
+      ${rows.map(r=>`<tr>
+        <td>${Number(r.data.slice(-2))}</td>
+        <td>${v(r.attrezzaturePO)}</td><td>${v(r.attrezzaturePS)}</td>
+        <td>${v(r.igieneAttrezzaturePO)}</td><td>${v(r.igieneAttrezzaturePS)}</td>
+        <td>${v(r.localiPO)}</td><td>${v(r.localiPS)}</td>
+        <td>${v(r.igieneLocaliPO)}</td><td>${v(r.igieneLocaliPS)}</td>
+        <td>${v(r.personale)}</td><td>${esc(r.verificatore)}</td>
+      </tr>`).join('')}
+    </table>
+    <script>onload=()=>print()</script>
+  </body></html>`);
+
+  w.document.close();
+}
+
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  view=b.dataset.view;
+  render();
+});
+
+if('serviceWorker'in navigator){
+  navigator.serviceWorker.register('./service-worker.js');
+}
