@@ -3,14 +3,15 @@ import { firebaseConfig, WORKSPACE_ID } from './firebase-config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword,
-  createUserWithEmailAndPassword, signOut
+  createUserWithEmailAndPassword, signOut,
+  setPersistence, browserLocalPersistence
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
 
 const LOCAL_KEY='haccp_pwa_v1';
-const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[]};
+const defaults={prodotti:[],temperature:[],frigoriferi:[],ssop:[],product_memory:[],abbattimenti:[]};
 
 let data={...defaults};
 let view='dashboard';
@@ -22,6 +23,7 @@ let currentScanImage=null;
 const firebaseApp=initializeApp(firebaseConfig);
 const auth=getAuth(firebaseApp);
 const db=getFirestore(firebaseApp);
+setPersistence(auth,browserLocalPersistence).catch(()=>{});
 
 const esc=s=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const id=()=>crypto.randomUUID?crypto.randomUUID():Date.now()+''+Math.random();
@@ -66,7 +68,7 @@ async function loadUserProfile(){
 }
 function startRealtime(){
   unsubscribers.forEach(u=>u());unsubscribers=[];
-  for(const name of ['prodotti','temperature','frigoriferi','ssop','product_memory']){
+  for(const name of ['prodotti','temperature','frigoriferi','ssop','product_memory','abbattimenti']){
     unsubscribers.push(onSnapshot(col(name),snap=>{
       data[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
       saveLocal(); if(ready)render();
@@ -97,8 +99,9 @@ function showLogin(){
     d.innerHTML=`<form id="loginForm" style="padding:22px;min-width:min(92vw,440px);font-family:-apple-system">
       <h2>☁️ HACCP condiviso</h2>
       <p style="color:#667">Accedi con il tuo account personale.</p>
-      <label style="display:block;margin:10px 0">Email<input id="loginEmail" type="email" required style="width:100%;padding:12px;margin-top:6px"></label>
-      <label style="display:block;margin:10px 0">Password<input id="loginPass" type="password" minlength="6" required style="width:100%;padding:12px;margin-top:6px"></label>
+      <label style="display:block;margin:10px 0">Email<input id="loginEmail" type="email" autocomplete="email" required style="width:100%;padding:12px;margin-top:6px"></label>
+      <label style="display:block;margin:10px 0">Password<input id="loginPass" type="password" autocomplete="current-password" minlength="6" required style="width:100%;padding:12px;margin-top:6px"></label>
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0"><input id="rememberMe" type="checkbox" checked> Ricordami su questo dispositivo</label>
       <details style="margin-top:14px;padding:12px;border:1px solid #ddd;border-radius:12px">
         <summary style="font-weight:800">👤 Dati nuovo utente</summary>
         <label style="display:block;margin:10px 0">Nome<input id="regNome" style="width:100%;padding:12px;margin-top:6px"></label>
@@ -109,10 +112,20 @@ function showLogin(){
       <div id="loginMsg" style="margin-top:12px;color:#b3261e"></div>
     </form>`;
     document.body.appendChild(d);
+    const savedEmail=localStorage.getItem('haccp_login_email')||'';
+    if(savedEmail)d.querySelector('#loginEmail').value=savedEmail;
+    d.querySelector('#rememberMe').checked=localStorage.getItem('haccp_remember_me')!=='0';
     d.querySelector('#loginForm').onsubmit=async e=>{
       e.preventDefault();const msg=d.querySelector('#loginMsg');
-      try{msg.textContent='Accesso...';await signInWithEmailAndPassword(auth,d.querySelector('#loginEmail').value.trim(),d.querySelector('#loginPass').value);msg.textContent=''}
-      catch{msg.textContent='Email o password non corretti.'}
+      try{
+        msg.textContent='Accesso...';
+        const email=d.querySelector('#loginEmail').value.trim();
+        await signInWithEmailAndPassword(auth,email,d.querySelector('#loginPass').value);
+        const remember=d.querySelector('#rememberMe').checked;
+        localStorage.setItem('haccp_remember_me',remember?'1':'0');
+        if(remember)localStorage.setItem('haccp_login_email',email); else localStorage.removeItem('haccp_login_email');
+        msg.textContent='';
+      }catch{msg.textContent='Email o password non corretti.'}
     };
     d.querySelector('#registerBtn').onclick=async()=>{
       const nome=d.querySelector('#regNome').value.trim(),cognome=d.querySelector('#regCognome').value.trim(),dataNascita=d.querySelector('#regNascita').value,msg=d.querySelector('#loginMsg');
@@ -137,7 +150,7 @@ function render(){
   if(!ready)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   const e=document.getElementById('view');
-  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():altro();
+  e.innerHTML=view==='dashboard'?dashboard():view==='magazzino'?magazzino():view==='scadenze'?scadenze():view==='temperature'?temperature():view==='attrezzature'?attrezzature():view==='ssop'?ssopView():view==='abbattimenti'?abbattimentiView():altro();
   bind();
 }
 function dashboard(){
@@ -147,7 +160,7 @@ function dashboard(){
   <div class="card"><b>SSOP oggi</b><div class="metric ${ssopDone?'ok':''}">${ssopDone?'✓':'—'}</div><div class="sub">${ssopDone?'Compilato':'Da compilare'}</div></div>
   <div class="card"><b>Scadenze critiche</b><div class="metric ${crit?'danger':'ok'}">${crit}</div></div></div>
   <div class="title"><h2>Azioni rapide</h2></div>
-  <div class="grid"><button data-a="scanLot">📷 Scanner lotto</button><button data-a="newP" class="ghost">✏️ Lotto manuale</button></div>
+  <div class="grid"><button data-a="scanLot">📷 Scanner lotto</button><button data-a="newP" class="ghost">✏️ Lotto manuale</button><button data-a="newAbb">❄️ Nuovo abbattimento</button><button data-a="goAbb" class="ghost">📋 Registro abbattimenti</button></div>
   <div class="title"><h2>Controllo giornaliero frighi</h2><button data-a="goTemps">Apri</button></div>
   <div class="list">${data.frigoriferi.map(f=>{const t=tempTodayFor(f.id);return`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • Limiti ${f.min}/${f.max} °C</div>${t?`<span class="badge ${tempOut(f,t)?'danger':''}">${Number(t.valore).toFixed(1)} °C • registrata oggi</span>`:'<span class="badge danger">MANCANTE OGGI</span>'}</div><button data-temp-eq="${f.id}">${t?'Modifica':'Registra'}</button></div>`}).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`;
 }
@@ -157,7 +170,72 @@ function scadenze(){return`<div class="title"><h2>Scadenze</h2></div><div class=
 function temperature(){return`<div class="title"><h2>Temperature giornaliere</h2></div><div class="card"><b>Una registrazione al giorno per ogni attrezzatura</b><div class="sub">Se esiste già, viene modificata.</div></div><div class="list" style="margin-top:12px">${data.frigoriferi.map(f=>{const t=tempTodayFor(f.id);return`<div class="item"><div class="icon">🌡️</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C</div>${t?`<span class="badge ${tempOut(f,t)?'danger':''}">${Number(t.valore).toFixed(1)} °C • ${esc(t.operatore||'')}</span>`:'<span class="badge danger">Non registrata oggi</span>'}</div><button data-temp-eq="${f.id}">${t?'Modifica':'Registra'}</button></div>`}).join('')||'<div class="empty">Nessun frigo/congelatore.</div>'}</div>`}
 function attrezzature(){return`<div class="title"><h2>Attrezzature</h2><button data-a="newE">+ Aggiungi</button></div><div class="list">${data.frigoriferi.map(f=>`<div class="item"><div class="icon">${f.tipo==='Congelatore'?'❄️':'🧊'}</div><div class="grow"><div class="name">${esc(f.nome)}</div><div class="sub">${esc(f.tipo)} • ${f.min}/${f.max} °C${f.posizione?' • '+esc(f.posizione):''}</div></div><button class="ghost" data-edit="${f.id}">✏️</button><button class="dangerBtn" data-del-eq="${f.id}">✕</button></div>`).join('')||'<div class="empty">Nessuna attrezzatura.</div>'}</div>`}
 function ssopView(){let[y,m]=ssopMonth.split('-').map(Number),n=new Date(y,m,0).getDate(),rows='';for(let d=1;d<=n;d++){const dt=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,r=data.ssop.find(x=>x.data===dt);rows+=`<div class="item"><div class="icon">${r?(ssopNC(r)?'⚠️':'✅'):'📋'}</div><div class="grow"><div class="name">${fmt(dt)}</div><div class="sub">${r?(ssopNC(r)?'Presente NC':'Tutto conforme'):'Non compilato'}</div></div><button data-ssop="${dt}">${r?'Apri':'Compila'}</button></div>`}return`<div class="title"><h2>Controllo SSOP</h2><button data-a="ssopPDF">PDF</button></div><div class="card"><b>C = Conforme • NC = Non Conforme</b><div class="sub">PO = Preoperativa • PS = Postoperativa</div></div><input id="ssopMonth" type="month" value="${ssopMonth}" style="margin-top:12px"><div class="list" style="margin-top:12px">${rows}</div>`}
-function altro(){return`<div class="title"><h2>Altro</h2></div><div class="list"><div class="item"><div class="icon">👤</div><div class="grow"><div class="name">${esc(profileName())}</div><div class="sub">${esc(currentUser?.email||'')}<br>${currentProfile?.dataNascita?'Nato/a il '+fmt(currentProfile.dataNascita):''}</div></div><button data-a="profile">Profilo</button></div><div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div><div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div></div><button data-a="logout">Esci</button></div></div>`}
+function altro(){return`<div class="title"><h2>Altro</h2></div><div class="list"><div class="item"><div class="icon">👤</div><div class="grow"><div class="name">${esc(profileName())}</div><div class="sub">${esc(currentUser?.email||'')}<br>${currentProfile?.dataNascita?'Nato/a il '+fmt(currentProfile.dataNascita):''}</div></div><button data-a="profile">Profilo</button></div><div class="item"><div class="icon">🧼</div><div class="grow"><div class="name">Controllo SSOP</div></div><button data-a="goSSOP">Apri</button></div>
+<div class="item"><div class="icon">❄️</div><div class="grow"><div class="name">Scheda abbattimento</div><div class="sub">Registro abbattimento prodotti alimentari</div></div><button data-a="goAbb">Apri</button></div><div class="item"><div class="icon">🧊</div><div class="grow"><div class="name">Frigoriferi e congelatori</div></div><button data-a="goE">Gestisci</button></div><div class="item"><div class="icon">☁️</div><div class="grow"><div class="name">Account cloud</div></div><button data-a="logout">Esci</button></div></div>`}
+
+
+function abbattimentiView(){
+  const rows=[...(data.abbattimenti||[])].sort((a,b)=>(b.dataAbbattimento||'').localeCompare(a.dataAbbattimento||''));
+  return `<div class="title"><h2>❄️ Scheda abbattimento</h2><button data-a="newAbb">+ Nuova</button></div>
+  <div class="card"><b>Scheda di abbattimento temperature dei prodotti alimentari</b><div class="sub">Registro digitale condiviso.</div></div>
+  <div class="list" style="margin-top:12px">
+  ${rows.map(r=>`<div class="item">
+    <div class="icon">❄️</div>
+    <div class="grow">
+      <div class="name">${esc(r.denominazione||'Prodotto')}</div>
+      <div class="sub">${fmt(r.dataAbbattimento)} • Lotto ${esc(r.lotto||'—')} • Conf. ${esc(r.confezioni||'—')}<br>${esc(r.tipoConfezionamento||'')} • ${esc(r.temperatura||'—')} °C / ${esc(r.tempo||'—')}</div>
+      <span class="badge ${r.conforme==='NON CONFORME'?'danger':''}">${esc(r.conforme||'—')}</span>
+      ${r.daConsumarsiEntro?`<div class="sub">Da consumarsi entro: ${fmt(r.daConsumarsiEntro)}</div>`:''}
+      ${r.preferibilmenteEntro?`<div class="sub">Preferibilmente entro: ${fmt(r.preferibilmenteEntro)}</div>`:''}
+    </div>
+    <button class="ghost" data-edit-abb="${r.id}">✏️</button>
+    <button class="dangerBtn" data-del-abb="${r.id}">✕</button>
+  </div>`).join('')||'<div class="empty">Nessun abbattimento registrato.</div>'}
+  </div>`;
+}
+
+function abbattimentoModal(ex=null){
+  const {m,f}=modalBase(ex?'Modifica abbattimento':'Nuovo abbattimento',
+  `<div class="form">
+    <label class="full">Denominazione del prodotto<input name="denominazione" required value="${esc(ex?.denominazione||'')}"></label>
+    <label>Lotto N°<input name="lotto" required value="${esc(ex?.lotto||'')}"></label>
+    <label>Confezioni N°<input name="confezioni" inputmode="numeric" value="${esc(ex?.confezioni||'')}"></label>
+    <label>Temperatura di abbattimento °C<input name="temperatura" inputmode="decimal" required value="${esc(ex?.temperatura||'')}"></label>
+    <label>Tempo di abbattimento<input name="tempo" placeholder="es. 90 min" required value="${esc(ex?.tempo||'')}"></label>
+    <label class="full">Esito<select name="conforme"><option ${ex?.conforme==='CONFORME'?'selected':''}>CONFORME</option><option ${ex?.conforme==='NON CONFORME'?'selected':''}>NON CONFORME</option></select></label>
+    <label class="full">Azione correttiva per Non Conformità<textarea name="azioneCorrettiva">${esc(ex?.azioneCorrettiva||'')}</textarea></label>
+    <label class="full">Tipo di confezionamento<select name="tipoConfezionamento"><option ${ex?.tipoConfezionamento==='Sottovuoto'?'selected':''}>Sottovuoto</option><option ${ex?.tipoConfezionamento==='Atmosfera protettiva'?'selected':''}>Atmosfera protettiva</option><option ${ex?.tipoConfezionamento==='Altro'?'selected':''}>Altro</option></select></label>
+    <label class="full">Altro confezionamento<input name="altroConfezionamento" value="${esc(ex?.altroConfezionamento||'')}"></label>
+    <label>Data di abbattimento<input name="dataAbbattimento" type="date" required value="${esc(ex?.dataAbbattimento||today())}"></label>
+    <label>Da consumarsi entro il<input name="daConsumarsiEntro" type="date" value="${esc(ex?.daConsumarsiEntro||'')}"></label>
+    <label class="full">Da consumarsi preferibilmente entro il<input name="preferibilmenteEntro" type="date" value="${esc(ex?.preferibilmenteEntro||'')}"></label>
+    <label class="full">Operatore<input name="operatore" value="${esc(ex?.operatore||profileName())}"></label>
+  </div>`,
+  async e=>{
+    e.preventDefault();
+    const x=new FormData(f);
+    const conforme=x.get('conforme'),azione=x.get('azioneCorrettiva').trim();
+    if(conforme==='NON CONFORME'&&!azione)return alert('Per una Non Conformità devi indicare l’azione correttiva.');
+    await saveShared('abbattimenti',{
+      id:ex?.id||id(),
+      denominazione:x.get('denominazione').trim(),
+      lotto:x.get('lotto').trim(),
+      confezioni:x.get('confezioni').trim(),
+      temperatura:x.get('temperatura').trim(),
+      tempo:x.get('tempo').trim(),
+      conforme,
+      azioneCorrettiva:azione,
+      tipoConfezionamento:x.get('tipoConfezionamento'),
+      altroConfezionamento:x.get('altroConfezionamento').trim(),
+      dataAbbattimento:x.get('dataAbbattimento'),
+      daConsumarsiEntro:x.get('daConsumarsiEntro'),
+      preferibilmenteEntro:x.get('preferibilmenteEntro'),
+      operatore:(x.get('operatore')||profileName()).trim(),
+      operatoreUid:currentUser?.uid||''
+    });
+    m.close();
+  });
+}
 
 function bind(){
   document.querySelectorAll('[data-a="newP"]').forEach(b=>b.onclick=()=>productModal());
@@ -166,6 +244,8 @@ function bind(){
   document.querySelectorAll('[data-a="goE"]').forEach(b=>b.onclick=()=>{view='attrezzature';render()});
   document.querySelectorAll('[data-a="goSSOP"]').forEach(b=>b.onclick=()=>{view='ssop';render()});
   document.querySelectorAll('[data-a="goTemps"]').forEach(b=>b.onclick=()=>{view='temperature';render()});
+  document.querySelectorAll('[data-a="goAbb"]').forEach(b=>b.onclick=()=>{view='abbattimenti';render()});
+  document.querySelectorAll('[data-a="newAbb"]').forEach(b=>b.onclick=()=>abbattimentoModal());
   document.querySelectorAll('[data-a="ssopPDF"]').forEach(b=>b.onclick=ssopPDF);
   document.querySelectorAll('[data-a="profile"]').forEach(b=>b.onclick=()=>profileModal(false));
   document.querySelectorAll('[data-a="logout"]').forEach(b=>b.onclick=()=>signOut(auth));
@@ -173,6 +253,8 @@ function bind(){
   document.querySelectorAll('[data-ssop]').forEach(b=>b.onclick=()=>ssopModal(b.dataset.ssop));
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>equipModal(data.frigoriferi.find(x=>x.id===b.dataset.edit)));
   document.querySelectorAll('[data-del-eq]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare attrezzatura?'))await removeShared('frigoriferi',b.dataset.delEq)});
+  document.querySelectorAll('[data-edit-abb]').forEach(b=>b.onclick=()=>abbattimentoModal((data.abbattimenti||[]).find(x=>x.id===b.dataset.editAbb)));
+  document.querySelectorAll('[data-del-abb]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questa scheda di abbattimento?'))await removeShared('abbattimenti',b.dataset.delAbb)});
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Eliminare questo lotto?'))await removeShared('prodotti',b.dataset.del)});
   const sm=document.getElementById('ssopMonth');if(sm)sm.onchange=()=>{ssopMonth=sm.value;render()};
   const s=document.getElementById('search');if(s)s.oninput=()=>{const q=s.value.toLowerCase();document.getElementById('inv').innerHTML=inv(data.prodotti.filter(p=>[p.nome,p.lotto,p.categoria,p.fornitore,p.barcode].some(x=>(x||'').toLowerCase().includes(q))));bind()};
